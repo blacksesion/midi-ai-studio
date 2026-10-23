@@ -16,8 +16,11 @@ RUN apt-get update \
 
 # CPU-only torch first (much smaller than the CUDA build), then the rest.
 # Versions match what the project is developed against.
-RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.5.1 \
-    && pip install --no-cache-dir numpy==1.26.4 scipy==1.16.3 mido tinysoundfont soundfile
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.5.1
+RUN pip install --no-cache-dir numpy==1.26.4 scipy==1.16.3 mido soundfile
+# tinysoundfont lists pyaudio as a hard dep, but we only use its offline Synth
+# (never its pyaudio-based playback), so skip pyaudio to avoid a source build.
+RUN pip install --no-cache-dir --no-deps tinysoundfont
 
 # Application code + the pre-trained model checkpoint.
 COPY midi_ai ./midi_ai
