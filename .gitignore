@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+assets/training/maestro-v3.0.0/
+assets/training/*.zip
+assets/soundfonts/*.sf3
+assets/soundfonts/*.sf2
+tmp/
+*.wav
