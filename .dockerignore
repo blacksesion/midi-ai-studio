@@ -1,0 +1,14 @@
+.git
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+# Heavy / regenerable assets (SoundFont + dataset download at build/runtime)
+assets/training/
+assets/soundfonts/
+examples/
+tmp/
+*.wav
+README.md
+LICENSE

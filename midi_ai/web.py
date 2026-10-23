@@ -21,8 +21,8 @@ from urllib.parse import unquote
 
 from .pipeline import RenderOptions, render_file
 
-HOST = "127.0.0.1"
-PORT = 8765
+HOST = os.environ.get("MIDI_AI_HOST", "127.0.0.1")
+PORT = int(os.environ.get("MIDI_AI_PORT", "8765"))
 
 _OUT_DIR = tempfile.mkdtemp(prefix="midiai_out_")
 
@@ -298,7 +298,8 @@ def main():
     url = f"http://{HOST}:{PORT}"
     print(f"MIDI-AI Studio: {url}")
     print("Press Ctrl+C to stop.")
-    threading.Timer(0.7, lambda: webbrowser.open(url)).start()
+    if HOST in ("127.0.0.1", "localhost"):
+        threading.Timer(0.7, lambda: webbrowser.open(url)).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

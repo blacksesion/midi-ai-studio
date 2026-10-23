@@ -1,0 +1,11 @@
+services:
+  midi-ai:
+    build: .
+    image: midi-ai-studio:latest
+    container_name: midi-ai
+    restart: unless-stopped
+    environment:
+      MIDI_AI_HOST: "0.0.0.0"
+      MIDI_AI_PORT: "8765"
+    ports:
+      - "80:8765"
