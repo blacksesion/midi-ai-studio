@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 import uuid
+from pathlib import Path
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote
@@ -138,237 +139,7 @@ def _start_workers():
         threading.Thread(target=_worker_loop, daemon=True, name="midi-render").start()
 
 
-PAGE = r"""<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>MIDI-AI Studio</title>
-<style>
-:root{--bg:#0e1117;--panel:#161b25;--panel2:#1c2230;--text:#e6e9ef;--muted:#8b93a7;
---accent:#5b8cff;--accent2:#22d3a5;--border:#2a3142;--radius:14px}
-*{box-sizing:border-box}
-body{margin:0;font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-background:radial-gradient(1200px 700px at 20% -10%,#16203a 0%,var(--bg) 60%);color:var(--text);min-height:100vh}
-.wrap{max-width:980px;margin:0 auto;padding:32px 20px 80px}
-h1{font-size:26px;margin:0 0 4px;letter-spacing:.3px}
-h1 .ai{color:var(--accent)}
-.sub{color:var(--muted);margin:0 0 28px}
-.grid{display:grid;grid-template-columns:1fr 340px;gap:20px}
-@media(max-width:820px){.grid{grid-template-columns:1fr}}
-.card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:20px}
-.drop{border:2px dashed var(--border);border-radius:var(--radius);padding:44px 20px;text-align:center;
-cursor:pointer;transition:.15s;background:var(--panel2)}
-.drop.hover,.drop:hover{border-color:var(--accent);background:#1a2236}
-.drop .big{font-size:44px;margin-bottom:8px}
-.drop .hint{color:var(--muted)}
-#fileinfo{margin-top:14px;font-size:14px;color:var(--accent2);display:none}
-label{display:block;font-size:13px;color:var(--muted);margin:16px 0 6px}
-.row{display:flex;justify-content:space-between;font-size:13px}
-.row b{color:var(--text)}
-input[type=range],select{width:100%;accent-color:var(--accent)}
-button{width:100%;margin-top:20px;padding:13px;font-size:16px;font-weight:600;border:0;border-radius:10px;
-background:linear-gradient(90deg,var(--accent),#7a5bff);color:#fff;cursor:pointer;transition:.15s}
-button:hover{filter:brightness(1.1)}
-button:disabled{opacity:.5;cursor:wait}
-.status{margin-top:16px;font-size:14px;color:var(--muted);min-height:20px}
-.status.ok{color:var(--accent2)}
-.player{margin-top:18px;display:none}
-audio{width:100%}
-.dl{margin-top:14px;display:flex;gap:10px}
-.dl a{flex:1;text-align:center;padding:10px;background:var(--panel2);border:1px solid var(--border);
-border-radius:10px;color:var(--text);text-decoration:none;font-weight:600}
-.dl a:hover{border-color:var(--accent)}
-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px}
-th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--border)}
-th{color:var(--muted);font-weight:600}
-.stats{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;font-size:13px;color:var(--muted)}
-.stats b{color:var(--text);font-size:15px}
-.progress{margin-top:12px;height:8px;background:var(--panel2);border-radius:4px;overflow:hidden;display:none}
-.progress>div{height:100%;background:linear-gradient(90deg,var(--accent),#7a5bff);width:0%}
-</style>
-</head>
-<body>
-<div class="wrap">
-  <h1>MIDI-AI <span class="ai">Studio</span></h1>
-  <p class="sub">Reproduce tus archivos MIDI con un sonido casi real: interpretaci&oacute;n
-  expresiva por IA + s&iacute;ntesis de alta calidad + mezcla profesional.</p>
-
-  <div class="grid">
-    <div>
-      <div class="card">
-        <div class="drop" id="drop">
-          <div class="big">&#127926;</div>
-          <div>Arrastra un archivo <b>.mid</b> aqu&iacute; o haz clic para elegirlo</div>
-          <div class="hint">tambi&eacute;n .midi</div>
-        </div>
-        <input type="file" id="file" accept=".mid,.midi" hidden/>
-        <div id="fileinfo"></div>
-
-        <div class="player" id="player">
-          <audio id="audio" controls></audio>
-          <div class="dl">
-            <a id="download" href="#" download>Descargar WAV</a>
-          </div>
-          <div class="stats" id="stats"></div>
-          <div style="margin-top:14px">
-            <div class="row"><span>Pistas</span></div>
-            <table id="tracks"></table>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div>
-      <div class="card">
-        <label>Preset de g&eacute;nero</label>
-        <select id="preset">
-          <option value="">Personalizado</option>
-          <option value="classical">Cl&aacute;sico</option>
-          <option value="jazz">Jazz</option>
-          <option value="pop">Pop</option>
-          <option value="cinematic">Cinem&aacute;tico</option>
-          <option value="neutral">Neutral</option>
-        </select>
-
-        <label>Intensidad de IA (expresi&oacute;n humana)</label>
-        <div class="row"><span>0%</span><b id="v_ai">60%</b><span>100%</span></div>
-        <input type="range" id="ai" min="0" max="1" step="0.05" value="0.6"/>
-
-        <label>Reverberaci&oacute;n</label>
-        <div class="row"><span>seca</span><b id="v_reverb">30%</b><span>sala</span></div>
-        <input type="range" id="reverb" min="0" max="1" step="0.01" value="0.30"/>
-
-        <label>Brillo</label>
-        <div class="row"><span>-6 dB</span><b id="v_brightness">0 dB</b><span>+6 dB</span></div>
-        <input type="range" id="brightness" min="-6" max="6" step="0.5" value="0"/>
-
-        <label>Calidez</label>
-        <div class="row"><span>-6 dB</span><b id="v_warmth">0 dB</b><span>+6 dB</span></div>
-        <input type="range" id="warmth" min="-6" max="6" step="0.5" value="0"/>
-
-        <label>Amplitud est&eacute;reo</label>
-        <div class="row"><span>mono</span><b id="v_width">0%</b><span>amplio</span></div>
-        <input type="range" id="width" min="0" max="1" step="0.05" value="0"/>
-
-        <label>Volumen (RMS)</label>
-        <div class="row"><span>suave</span><b id="v_loudness">-15 dB</b><span>fuerte</span></div>
-        <input type="range" id="loudness" min="-24" max="-8" step="1" value="-15"/>
-
-        <label>Saturaci&oacute;n (cinta)</label>
-        <div class="row"><span>off</span><b id="v_saturation">0.5 dB</b><span>3 dB</span></div>
-        <input type="range" id="saturation" min="0" max="3" step="0.5" value="0.5"/>
-
-        <button id="renderBtn" disabled>Renderizar</button>
-        <div class="progress" id="progress"><div id="pbar"></div></div>
-        <div class="status" id="status"></div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<script>
-const $=id=>document.getElementById(id);
-const state={file:null,job:null};
-const drop=$('drop'),fileEl=$('file');
-drop.onclick=()=>fileEl.click();
-fileEl.onchange=e=>{if(e.target.files[0])setFile(e.target.files[0])};
-['dragover','dragenter'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('hover')}));
-['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('hover')}));
-drop.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)setFile(f)});
-function setFile(f){
-  if(!/\.midi?$/i.test(f.name)){status('Formato no v&aacute;lido','err');return}
-  state.file=f;
-  $('fileinfo').style.display='block';
-  $('fileinfo').innerHTML='&#128220; '+f.name+' &mdash; '+(f.size/1024).toFixed(1)+' KB';
-  $('renderBtn').disabled=false;
-  status('Listo para renderizar');
-}
-['ai','reverb','brightness','warmth','width','loudness','saturation'].forEach(id=>{
-  const el=$(id);
-  const fmt=id==='loudness'?v=>v+' dB':id==='brightness'||id==='warmth'||id==='saturation'?v=>(v>0?'+':'')+v+' dB':v=>Math.round(v*100)+'%';
-  const upd=()=>$('v_'+id).textContent=fmt(el.value);
-  el.addEventListener('input',upd);upd();
-});
-const PRESETS={classical:{ai:.7,reverb:.35,brightness:0,warmth:1,width:.15,loudness:-16,saturation:.2},
- jazz:{ai:.65,reverb:.25,brightness:0,warmth:2,width:.1,loudness:-14,saturation:.4},
- pop:{ai:.45,reverb:.2,brightness:2,warmth:0,width:.25,loudness:-12,saturation:.6},
- cinematic:{ai:.75,reverb:.45,brightness:0,warmth:1.5,width:.4,loudness:-16,saturation:.3},
- neutral:{ai:0,reverb:.2,brightness:0,warmth:0,width:0,loudness:-15,saturation:0}};
-$('preset').onchange=e=>{
-  const p=PRESETS[e.target.value]; if(!p) return;
-  $('ai').value=p.ai; $('reverb').value=p.reverb; $('brightness').value=p.brightness;
-  $('warmth').value=p.warmth; $('width').value=p.width; $('loudness').value=p.loudness;
-  $('saturation').value=p.saturation;
-  ['ai','reverb','brightness','warmth','width','loudness','saturation'].forEach(id=>{
-    const el=$(id); const upd=()=>$('v_'+id).textContent=
-      id==='loudness'?el.value+' dB':(id==='brightness'||id==='warmth'||id==='saturation')?(el.value>0?'+':'')+el.value+' dB':Math.round(el.value*100)+'%';
-    upd();
-  });
-};
-function status(msg,cls){const s=$('status');s.textContent=msg;s.className='status'+(cls?' '+cls:'');}
-function opts(){return{
-  ai_strength:parseFloat($('ai').value),
-  reverb:parseFloat($('reverb').value),
-  brightness:parseFloat($('brightness').value),
-  warmth:parseFloat($('warmth').value),
-  width:parseFloat($('width').value),
-  loudness_db:parseFloat($('loudness').value),
-  saturation:parseFloat($('saturation').value),
-  sample_rate:44100,seed:42,use_model:parseFloat($('ai').value)>0
-};}
-$('renderBtn').onclick=async()=>{
-  if(!state.file)return;
-  const btn=$('renderBtn');btn.disabled=true;
-  $('progress').style.display='block'; $('pbar').style.width='0%';
-  status('Enviando archivo...');
-  const buf=await state.file.arrayBuffer();
-  const b64=btoa(String.fromCharCode(...new Uint8Array(buf)));
-  try{
-    const r=await fetch('/api/render',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({name:state.file.name,data:b64,options:opts()})});
-    const j=await r.json();
-    if(!j.ok){status('Error: '+(j.error||'desconocido'),'err');return}
-    state.job=j.job_id;
-    poll();
-  }catch(e){status('Error: '+e.message,'err');btn.disabled=false}
-};
-function poll(){
-  if(!state.job)return;
-  fetch('/api/status?job='+state.job).then(r=>r.json()).then(j=>{
-    if(j.progress!=null){$('pbar').style.width=Math.round(j.progress*100)+'%';}
-    if(j.status==='queued'){
-      status('En cola ('+(j.queue_size||0)+' pendientes)...');
-      setTimeout(poll,1000);
-    } else if(j.status==='running'){
-      status('Renderizando... '+Math.round((j.progress||0)*100)+'%');
-      setTimeout(poll,800);
-    } else if(j.status==='done'){
-      const a=$('audio');a.src=j.url;a.onloadedmetadata=()=>a.play();
-      $('player').style.display='block';
-      $('download').href=j.url;
-      $('download').setAttribute('download',j.outname||'output.wav');
-      $('stats').innerHTML='<span>Duraci&oacute;n <b>'+j.duration+' s</b></span>'+
-        '<span>BPM <b>'+j.bpm+'</b></span>'+
-        '<span>IA <b>'+(j.model_used?'s&iacute;':'no')+'</b></span>'+
-        '<span>Tiempo <b>'+j.elapsed+' s</b></span>';
-      const tb=$('tracks');tb.innerHTML='<tr><th>Instrumento</th><th>Notas</th><th>Pista</th></tr>'+
-        j.tracks.map(t=>'<tr><td>'+t.instrument+'</td><td>'+t.notes+'</td><td>'+t.name+'</td></tr>').join('');
-      status('Renderizado correctamente','ok');
-      $('renderBtn').disabled=false;
-      state.job=null;
-    } else {
-      status('Error: '+(j.error||'desconocido'),'err');
-      $('renderBtn').disabled=false;
-      state.job=null;
-    }
-  }).catch(e=>{status('Error: '+e.message,'err');$('renderBtn').disabled=false;state.job=null});
-}
-</script>
-</body>
-</html>
-"""
-PAGE = PAGE
+PAGE = (Path(__file__).with_name("ui.html")).read_text(encoding="utf-8")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -387,7 +158,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/" or self.path == "/index.html":
-            self._send(200, PAGE.encode("utf-8"))
+            self._send(200, PAGE.encode("utf-8"), extra={"Cache-Control": "no-store"})
         elif self.path == "/healthz":
             body = json.dumps({
                 "ok": True,
@@ -401,7 +172,8 @@ class Handler(BaseHTTPRequestHandler):
             path = os.path.join(_OUT_DIR, name)
             if os.path.exists(path):
                 with open(path, "rb") as f:
-                    self._send(200, f.read(), "audio/wav")
+                    self._send(200, f.read(), "audio/wav",
+                               {"Cache-Control": "public, max-age=3600"})
             else:
                 self._send(404, b"not found", "text/plain")
         elif self.path.startswith("/api/status"):

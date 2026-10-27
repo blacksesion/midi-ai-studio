@@ -1,0 +1,1282 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MIDI-AI Studio — Interpretación musical con IA</title>
+<meta name="description" content="Convierte un MIDI mecánico en una interpretación expresiva: dinámica, timing y articulación nota a nota, sintetizadas con SoundFont y masterizadas a −15 LUFS.">
+<meta name="theme-color" content="#0a0b0d">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%230a0b0d'/%3E%3Cpath d='M5 14v-4M9 17V7M13 15V9M17 18V6M21 13v-2' stroke='%23c8ff3d' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ground:#0a0b0d;
+  --panel:#111216;
+  --panel-2:#0e0f12;
+  --panel-3:#1a1c21;
+  --border:#24262c;
+  --border-strong:#34373f;
+  --ink:#f2f3ee;
+  --muted:#9297a0;
+  --faint:#7c828d;
+  --accent:#c8ff3d;
+  --accent-hover:#d7ff6a;
+  --danger:#ff6b6b;
+  --radius:8px;
+  --radius-sm:4px;
+}
+*{box-sizing:border-box}
+html{height:100%}
+body{
+  margin:0;min-height:100%;background:var(--ground);color:var(--ink);
+  font-family:"Instrument Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--accent);color:var(--ground)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
+[hidden]{display:none!important}
+button,input{font:inherit}
+a{color:inherit}
+.app{min-height:100vh;display:flex;flex-direction:column}
+.shell{width:100%;max-width:1280px;margin:0 auto;padding:0 28px}
+
+/* top bar */
+.topbar{height:56px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:26px}
+.brand{display:flex;align-items:center;gap:10px;text-decoration:none;white-space:nowrap}
+.brand .mark{display:flex;color:var(--accent)}
+.brand .word{font-size:14px;font-weight:650;letter-spacing:-.015em}
+.brand .word span{font-weight:450;color:var(--muted)}
+.topbar-right{margin-left:auto;display:flex;align-items:center;gap:16px}
+.engine{display:inline-flex;align-items:center;gap:7px;font-size:11.5px;color:var(--muted);white-space:nowrap}
+.engine-dot{width:6px;height:6px;border-radius:50%;background:var(--faint);transition:background .2s}
+.engine.ok .engine-dot{background:var(--accent)}
+.engine.err .engine-dot{background:var(--danger)}
+.version{font-size:11.5px;color:var(--faint);font-variant-numeric:tabular-nums}
+
+/* page head */
+.main{flex:1;padding:32px 0 44px}
+.page-head{display:flex;justify-content:space-between;align-items:flex-end;gap:40px;margin-bottom:22px}
+h1{font-size:30px;line-height:1.08;letter-spacing:-.035em;font-weight:600;margin:0 0 8px}
+.lede{max-width:590px;margin:0;color:var(--muted);font-size:14.5px}
+.specs{display:flex;gap:30px;flex-shrink:0;padding-bottom:2px}
+.specs div{display:flex;flex-direction:column;gap:1px}
+.specs span{font-size:11px;color:var(--faint)}
+.specs b{font-size:13px;font-weight:500;font-variant-numeric:tabular-nums;white-space:nowrap}
+
+/* console */
+.console{display:grid;grid-template-columns:minmax(0,1fr) 368px;gap:16px;align-items:stretch}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius)}
+.score-panel{position:relative;display:flex;flex-direction:column;min-height:596px;overflow:hidden;background:var(--panel);cursor:pointer}
+.score-panel.dragging{border-color:var(--accent)}
+.score-head{flex:0 0 56px;display:flex;align-items:center;gap:12px;padding:0 16px;border-bottom:1px solid var(--border);cursor:default}
+.score-file{min-width:0;flex:1}
+.score-file .name{font-size:13.5px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.score-file .sub{margin-top:1px;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.ghost{background:transparent;border:1px solid var(--border-strong);color:var(--ink);border-radius:var(--radius-sm);font-size:12px;font-weight:550;padding:7px 10px;cursor:pointer;transition:border-color .15s,color .15s;white-space:nowrap}
+.ghost:hover{border-color:var(--accent);color:var(--accent)}
+.roll-wrap{position:relative;flex:1;min-height:498px;background:var(--panel-2)}
+.roll-wrap canvas{position:absolute;inset:0;display:block;width:100%;height:100%}
+.score-empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px;pointer-events:none}
+.score-empty .icon{color:var(--accent);margin-bottom:12px;opacity:.9}
+.score-empty .title{font-size:16px;font-weight:600;letter-spacing:-.01em}
+.score-empty .hint{margin-top:4px;font-size:13px;color:var(--muted)}
+.score-empty .hint b{color:var(--ink);font-weight:500}
+.score-foot{flex:0 0 42px;display:flex;align-items:center;gap:14px;padding:0 16px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);overflow:hidden}
+.legend{display:flex;align-items:center;gap:12px;min-width:0;overflow:hidden}
+.legend .item{display:flex;align-items:center;gap:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.legend .dot{width:6px;height:6px;border-radius:50%;flex:0 0 6px}
+.legend .more{color:var(--faint);white-space:nowrap}
+
+/* inspector */
+.inspector{display:flex;flex-direction:column;padding:16px;min-height:596px}
+.inspector-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:11px}
+.label{font-size:12.5px;color:var(--muted)}
+.preset-name{font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
+.presets{display:grid;grid-template-columns:repeat(5,1fr);gap:3px;padding:3px;margin-bottom:18px;background:var(--panel-2);border:1px solid var(--border);border-radius:5px}
+.preset{position:relative;border:0;background:transparent;color:var(--muted);font-size:12px;font-weight:550;padding:7px 1px;border-radius:3px;cursor:pointer;transition:color .15s,background .15s}
+.preset:hover{color:var(--ink)}
+.preset.active{background:var(--panel-3);color:var(--ink)}
+.preset.active::after{content:"";position:absolute;left:8px;right:8px;bottom:0;height:2px;border-radius:1px;background:var(--accent)}
+.fields{display:flex;flex-direction:column;gap:14px}
+.field{display:flex;flex-direction:column;gap:6px}
+.field-top{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.field label{font-size:13px;color:var(--muted);cursor:pointer}
+.field output{font-size:12.5px;color:var(--ink);font-variant-numeric:tabular-nums}
+input[type=range]{
+  --p:50%;-webkit-appearance:none;appearance:none;display:block;width:100%;height:2px;margin:4px 0 3px;
+  border-radius:2px;background:linear-gradient(to right,var(--accent) 0 var(--p),var(--border-strong) var(--p) 100%);
+  outline:none;cursor:pointer;
+}
+input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;width:13px;height:13px;border-radius:50%;background:var(--ink);
+  border:2px solid var(--accent);box-shadow:0 0 0 3px var(--panel);cursor:grab;
+  transition:transform .12s;
+}
+input[type=range]::-webkit-slider-thumb:active{transform:scale(1.12);cursor:grabbing}
+input[type=range]::-moz-range-thumb{
+  width:11px;height:11px;border-radius:50%;background:var(--ink);border:2px solid var(--accent);
+  box-shadow:0 0 0 3px var(--panel);cursor:grab;
+}
+input[type=range]:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 3px var(--panel),0 0 0 5px var(--accent)}
+.render-block{margin-top:auto;padding-top:20px}
+.primary{
+  width:100%;height:42px;border:1px solid transparent;border-radius:var(--radius-sm);background:var(--accent);
+  color:#0a0b0d;font-size:13.5px;font-weight:650;letter-spacing:-.005em;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  transition:background .15s,transform .1s,opacity .15s;
+}
+.primary:hover:not(:disabled){background:var(--accent-hover)}
+.primary:active:not(:disabled){transform:translateY(1px)}
+.primary:disabled{background:var(--panel-3);border-color:var(--border);color:var(--muted);cursor:not-allowed}
+.spinner{display:none;width:12px;height:12px;border:2px solid rgba(10,11,13,.28);border-top-color:#0a0b0d;border-radius:50%;animation:spin .7s linear infinite}
+.primary.busy .spinner{display:block}
+@keyframes spin{to{transform:rotate(360deg)}}
+.progress{display:none;margin-top:12px}
+.progress.show{display:block}
+.progress .track{height:2px;border-radius:2px;background:var(--border-strong);overflow:hidden}
+.progress .track>div{height:100%;width:0;background:var(--accent);transition:width .25s}
+.progress-meta{display:flex;justify-content:space-between;gap:12px;margin-top:6px;font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.status{display:flex;align-items:flex-start;gap:6px;min-height:16px;margin:10px 0 0;font-size:12px;line-height:1.45;color:var(--muted)}
+.status.busy::before{content:"";flex:0 0 5px;width:5px;height:5px;margin-top:5px;border-radius:50%;background:var(--accent);animation:pulse 1.1s ease-in-out infinite}
+.status.ok{color:var(--accent)}
+.status.error{color:var(--danger)}
+@keyframes pulse{50%{opacity:.25}}
+
+/* result */
+.result{display:none;margin-top:16px;padding:18px;scroll-margin-top:16px}
+.result.show{display:block}
+.result-head{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;margin-bottom:16px}
+.result-head h2{margin:2px 0 0;font-size:20px;font-weight:600;letter-spacing:-.025em;line-height:1.15}
+.result-grid{display:grid;grid-template-columns:1.35fr 1fr;gap:26px;align-items:start}
+.wave-wrap{position:relative;height:148px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--panel-2);overflow:hidden}
+.wave-wrap canvas{display:block;width:100%;height:100%;cursor:pointer}
+audio{display:block;width:100%;height:40px;margin-top:12px;color-scheme:dark}
+.audio-note{margin:7px 0 0;font-size:11px;color:var(--faint)}
+.stats{display:flex;flex-wrap:wrap;gap:5px 18px;margin-top:12px;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.stats b{color:var(--ink);font-weight:550}
+.tracks-title{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:8px}
+.tracks-title span{font-size:12px;color:var(--muted)}
+.tracks-title em{font-style:normal;font-size:11px;color:var(--faint);font-variant-numeric:tabular-nums}
+.tracks-wrap{max-height:258px;overflow:auto}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+thead th{padding:0 8px 8px;border-bottom:1px solid var(--border);color:var(--faint);font-size:11px;font-weight:450;text-align:left;white-space:nowrap}
+thead th:last-child,tbody td:last-child{text-align:right}
+tbody td{max-width:190px;padding:9px 8px;border-bottom:1px solid var(--border);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+tbody tr:last-child td{border-bottom:0}
+tbody td:first-child{color:var(--ink);font-weight:500}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+.track-dot{display:inline-block;width:6px;height:6px;margin-right:7px;border-radius:50%;vertical-align:1px}
+
+/* footer */
+.footer{border-top:1px solid var(--border);padding-top:15px;padding-bottom:15px;display:flex;justify-content:space-between;gap:20px;font-size:12px;color:var(--faint)}
+.footer b{font-weight:500;color:var(--muted)}
+
+/* responsive */
+@media(max-width:980px){
+  .console{grid-template-columns:1fr}
+  .score-panel{min-height:440px}
+  .roll-wrap{min-height:342px}
+  .inspector{min-height:0}
+  .result-grid{grid-template-columns:1fr}
+  .specs{gap:20px}
+}
+@media(max-width:840px){
+  .page-head{flex-direction:column;align-items:flex-start;gap:16px}
+  .specs{width:100%;gap:0;justify-content:space-between}
+  .specs b{font-size:12px}
+}
+@media(max-width:700px){
+  .shell{padding:0 16px}
+  .topbar{gap:14px}
+  .main{padding:22px 0 34px}
+  h1{font-size:26px}
+  .score-panel{min-height:372px}
+  .roll-wrap{min-height:274px}
+  .score-head{height:auto;min-height:56px;flex-wrap:wrap;padding:10px 12px}
+  .score-foot{padding:0 12px;overflow-x:auto}
+  .inspector{padding:14px}
+  .result{padding:14px}
+  .result-head{flex-direction:column;align-items:stretch}
+  .result-head .ghost{text-align:center}
+  .result-grid{gap:20px}
+  .footer{flex-direction:column;gap:4px}
+}
+@media(max-width:520px){
+  .brand .word span{display:none}
+  .engine{font-size:11px}
+  .presets{grid-template-columns:repeat(5,1fr)}
+  .preset{font-size:10.5px}
+  thead th:nth-child(3),tbody td:nth-child(3){display:none}
+}
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar shell">
+    <a class="brand" href="/" aria-label="MIDI-AI Studio, inicio">
+      <span class="mark" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+          <path d="M3 14v-4M7 18V6M11 15V9M15 19V5M19 13v-2M22 12h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </span>
+      <span class="word">MIDI-AI <span>Studio</span></span>
+    </a>
+    <div class="topbar-right">
+      <span class="engine" id="engine" title="Estado del motor">
+        <span class="engine-dot" aria-hidden="true"></span>
+        <span id="engineText">Conectando…</span>
+      </span>
+      <span class="version">v2.0</span>
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="shell">
+      <div class="page-head">
+        <div>
+          <h1>Estudio</h1>
+          <p class="lede">Sube un MIDI y deja que el modelo decida dinámica, timing y articulación nota a nota. Tú eliges el carácter; el motor se encarga del resto.</p>
+        </div>
+        <div class="specs" aria-label="Especificaciones del motor">
+          <div><span>Modelo</span><b>seqcnn</b></div>
+          <div><span>Entrenamiento</span><b>3.6M notas</b></div>
+          <div><span>Master</span><b>−15 LUFS</b></div>
+        </div>
+      </div>
+
+      <section class="console" aria-label="Estudio de renderizado">
+        <div class="panel score-panel" id="drop" role="button" tabindex="0" aria-label="Suelta un archivo MIDI o pulsa para elegirlo">
+          <div class="score-head">
+            <div class="score-file">
+              <div class="name" id="fileName">Sin archivo</div>
+              <div class="sub" id="fileSub">Arrastra un .mid aquí o elige uno</div>
+            </div>
+            <button class="ghost" id="chooseBtn" type="button">Cargar MIDI</button>
+          </div>
+          <div class="roll-wrap">
+            <canvas id="roll" aria-label="Vista previa de la partitura"></canvas>
+            <div class="score-empty" id="scoreEmpty">
+              <svg class="icon" width="34" height="34" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              <div class="title">Suelta tu MIDI aquí</div>
+              <div class="hint">o <b>elige un archivo</b> · .mid / .midi · máx. 4 MB</div>
+            </div>
+          </div>
+          <div class="score-foot">
+            <div class="legend" id="legend">
+              <span>La vista previa de las pistas aparecerá aquí.</span>
+            </div>
+          </div>
+        </div>
+
+        <aside class="panel inspector" aria-label="Parámetros de interpretación">
+          <div class="inspector-head">
+            <span class="label">Interpretación</span>
+            <span class="preset-name" id="presetName">Personalizado</span>
+          </div>
+
+          <div class="presets" role="group" aria-label="Preset de género">
+            <button class="preset" type="button" data-preset="classical">Clásico</button>
+            <button class="preset" type="button" data-preset="jazz">Jazz</button>
+            <button class="preset" type="button" data-preset="pop">Pop</button>
+            <button class="preset" type="button" data-preset="cinematic">Cine</button>
+            <button class="preset" type="button" data-preset="neutral">Neutral</button>
+          </div>
+
+          <div class="fields">
+            <div class="field">
+              <div class="field-top"><label for="ai">Expresión de IA</label><output id="v_ai" for="ai">60%</output></div>
+              <input type="range" id="ai" min="0" max="1" step="0.05" value="0.6">
+            </div>
+            <div class="field">
+              <div class="field-top"><label for="reverb">Reverberación</label><output id="v_reverb" for="reverb">30%</output></div>
+              <input type="range" id="reverb" min="0" max="1" step="0.01" value="0.30">
+            </div>
+            <div class="field">
+              <div class="field-top"><label for="brightness">Brillo</label><output id="v_brightness" for="brightness">0.0 dB</output></div>
+              <input type="range" id="brightness" min="-6" max="6" step="0.5" value="0">
+            </div>
+            <div class="field">
+              <div class="field-top"><label for="warmth">Calidez</label><output id="v_warmth" for="warmth">0.0 dB</output></div>
+              <input type="range" id="warmth" min="-6" max="6" step="0.5" value="0">
+            </div>
+            <div class="field">
+              <div class="field-top"><label for="width">Amplitud estéreo</label><output id="v_width" for="width">0%</output></div>
+              <input type="range" id="width" min="0" max="1" step="0.05" value="0">
+            </div>
+            <div class="field">
+              <div class="field-top"><label for="loudness">Volumen</label><output id="v_loudness" for="loudness">−15 dB</output></div>
+              <input type="range" id="loudness" min="-24" max="-8" step="1" value="-15">
+            </div>
+            <div class="field">
+              <div class="field-top"><label for="saturation">Saturación de cinta</label><output id="v_saturation" for="saturation">0.5 dB</output></div>
+              <input type="range" id="saturation" min="0" max="3" step="0.5" value="0.5">
+            </div>
+          </div>
+
+          <div class="render-block">
+            <button class="primary" id="renderBtn" type="button" disabled>
+              <span class="spinner" aria-hidden="true"></span>
+              <span class="btn-label">Renderizar</span>
+            </button>
+            <div class="progress" id="progressWrap" aria-hidden="true">
+              <div class="track"><div id="pbar"></div></div>
+              <div class="progress-meta"><span id="progressLabel">En cola</span><span id="progressPct">0%</span></div>
+            </div>
+            <p class="status" id="status" role="status" aria-live="polite">Carga un MIDI para empezar.</p>
+          </div>
+        </aside>
+      </section>
+
+      <section class="panel result" id="player" aria-label="Resultado del render">
+        <div class="result-head">
+          <div>
+            <span class="label">Resultado</span>
+            <h2 id="resultTitle">Tu interpretación</h2>
+          </div>
+          <a class="ghost" id="download" href="#" download>Descargar WAV</a>
+        </div>
+        <div class="result-grid">
+          <div>
+            <div class="wave-wrap"><canvas id="wave" aria-label="Forma de onda del resultado"></canvas></div>
+            <audio id="audio" controls preload="metadata"></audio>
+            <p class="audio-note">Haz clic en la onda para mover la reproducción.</p>
+            <div class="stats" id="stats"></div>
+          </div>
+          <div>
+            <div class="tracks-title"><span>Pistas renderizadas</span><em id="trackCount"></em></div>
+            <div class="tracks-wrap">
+              <table>
+                <thead><tr><th>Instrumento</th><th class="num">Notas</th><th>Pista</th></tr></thead>
+                <tbody id="tracks"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="footer shell">
+    <span><b>MIDI-AI Studio</b> · interpretación expresiva sobre MIDI</span>
+    <span>PyTorch · TinySoundFont · 44.1 kHz</span>
+  </footer>
+</div>
+
+<input type="file" id="file" accept=".mid,.midi" hidden>
+<noscript><p style="max-width:1280px;margin:0 auto;padding:24px;color:#ff6b6b">Necesitas activar JavaScript para usar el estudio.</p></noscript>
+
+<script>
+(() => {
+  "use strict";
+
+  const $ = id => document.getElementById(id);
+  const MAX_UPLOAD = 4 * 1024 * 1024;
+  const TRACK_COLORS = ["#c8ff3d", "#5eead4", "#fbbf24", "#fb7185", "#7dd3fc", "#d8b4fe"];
+  const state = {
+    file: null,
+    buffer: null,
+    midi: null,
+    job: null,
+    peaks: null,
+    waveDuration: 0,
+    raf: 0,
+    audioCtx: null,
+    playTime: 0,
+    preset: null,
+    previewFailed: false,
+  };
+
+  const drop = $("drop");
+  const fileEl = $("file");
+  const roll = $("roll");
+  const wave = $("wave");
+  const audio = $("audio");
+  const btn = $("renderBtn");
+  const statusEl = $("status");
+
+  const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+
+  const fmtBytes = n => n >= 1024 * 1024
+    ? (n / 1024 / 1024).toFixed(2) + " MB"
+    : Math.max(1, Math.round(n / 1024)) + " KB";
+
+  const fmtClock = sec => {
+    sec = Math.max(0, Math.round(Number(sec) || 0));
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return m + ":" + String(s).padStart(2, "0");
+  };
+
+  const fmtDb = v => (Number(v) > 0 ? "+" : "") + Number(v).toFixed(1) + " dB";
+
+  const FMT = {
+    ai: v => Math.round(Number(v) * 100) + "%",
+    reverb: v => Math.round(Number(v) * 100) + "%",
+    width: v => Math.round(Number(v) * 100) + "%",
+    brightness: fmtDb,
+    warmth: fmtDb,
+    saturation: fmtDb,
+    loudness: v => (Number(v) < 0 ? "−" : "") + Math.abs(Number(v)) + " dB",
+  };
+
+  /* ---------------- MIDI preview ---------------- */
+  function readVarLen(dv, ref) {
+    let value = 0;
+    let byte;
+    do {
+      byte = dv.getUint8(ref.p++);
+      value = (value << 7) | (byte & 0x7f);
+    } while (byte & 0x80);
+    return value;
+  }
+
+  function parseMidi(arrayBuffer) {
+    const dv = new DataView(arrayBuffer);
+    const ref = { p: 0 };
+    const readString = n => {
+      let s = "";
+      for (let i = 0; i < n; i++) s += String.fromCharCode(dv.getUint8(ref.p++));
+      return s;
+    };
+
+    if (readString(4) !== "MThd") throw new Error("No es un archivo MIDI válido");
+    const headerLen = dv.getUint32(ref.p); ref.p += 4;
+    const format = dv.getUint16(ref.p); ref.p += 2;
+    const declaredTracks = dv.getUint16(ref.p); ref.p += 2;
+    const division = dv.getUint16(ref.p); ref.p += 2;
+    ref.p += Math.max(0, headerLen - 6);
+
+    if (division & 0x8000) throw new Error("El tiempo SMPTE no está soportado en la vista previa");
+    const ppq = division || 480;
+
+    const tempos = [{ tick: 0, us: 500000 }];
+    const tracks = [];
+
+    while (ref.p + 8 <= dv.byteLength) {
+      const chunkId = readString(4);
+      const chunkLen = dv.getUint32(ref.p); ref.p += 4;
+      const chunkEnd = ref.p + chunkLen;
+      if (chunkId !== "MTrk") {
+        ref.p = chunkEnd;
+        continue;
+      }
+
+      const events = [];
+      let tick = 0;
+      let running = 0;
+      let trackName = "";
+      let sawEnd = false;
+
+      while (ref.p < chunkEnd) {
+        tick += readVarLen(dv, ref);
+        let status = dv.getUint8(ref.p);
+        if (status < 0x80) {
+          status = running;
+        } else {
+          ref.p++;
+          if (status < 0xf0) running = status;
+        }
+        const type = status & 0xf0;
+        const channel = status & 0x0f;
+
+        if (status === 0xff) {
+          const metaType = dv.getUint8(ref.p++);
+          const metaLen = readVarLen(dv, ref);
+          if (metaType === 0x51 && metaLen === 3) {
+            const us = (dv.getUint8(ref.p) << 16) | (dv.getUint8(ref.p + 1) << 8) | dv.getUint8(ref.p + 2);
+            if (us > 0) tempos.push({ tick, us });
+          } else if (metaType === 0x03 && !trackName) {
+            let s = "";
+            for (let i = 0; i < metaLen; i++) s += String.fromCharCode(dv.getUint8(ref.p + i));
+            trackName = s.replace(/\0/g, "").trim();
+          }
+          ref.p += metaLen;
+          if (metaType === 0x2f) { sawEnd = true; break; }
+        } else if (status === 0xf0 || status === 0xf7) {
+          const len = readVarLen(dv, ref);
+          ref.p += len;
+        } else if (status === 0xf1 || status === 0xf3) {
+          ref.p += 1;
+        } else if (status === 0xf2) {
+          ref.p += 2;
+        } else if (type === 0x90 || type === 0x80) {
+          const pitch = dv.getUint8(ref.p++);
+          const velocity = dv.getUint8(ref.p++);
+          const on = type === 0x90 && velocity > 0;
+          events.push({ tick, on, pitch, velocity, channel });
+        } else if (type === 0xc0 || type === 0xd0) {
+          ref.p += 1;
+        } else {
+          ref.p += 2;
+        }
+      }
+      if (!sawEnd) ref.p = chunkEnd;
+
+      events.sort((a, b) => a.tick - b.tick || a.on - b.on);
+      const active = new Map();
+      const notes = [];
+      for (const ev of events) {
+        const key = ev.channel + ":" + ev.pitch;
+        if (ev.on) {
+          if (active.has(key)) {
+            const prev = active.get(key);
+            if (ev.tick > prev.start) notes.push(prev);
+          }
+          active.set(key, { pitch: ev.pitch, velocity: ev.velocity, start: ev.tick, channel: ev.channel });
+        } else {
+          const prev = active.get(key);
+          if (prev) {
+            prev.end = Math.max(ev.tick, prev.start + 1);
+            notes.push(prev);
+            active.delete(key);
+          }
+        }
+      }
+      for (const prev of active.values()) {
+        prev.end = Math.max(tick, prev.start + 1);
+        notes.push(prev);
+      }
+      tracks.push({ name: trackName, notes });
+      ref.p = chunkEnd;
+    }
+
+    if (!tracks.length) throw new Error("El MIDI no contiene pistas");
+    tempos.sort((a, b) => a.tick - b.tick);
+
+    const tickToSec = target => {
+      let sec = 0, lastTick = 0, us = 500000;
+      for (const t of tempos) {
+        if (t.tick > target) break;
+        sec += (t.tick - lastTick) * (us / 1e6) / ppq;
+        lastTick = t.tick;
+        us = t.us;
+      }
+      return sec + (target - lastTick) * (us / 1e6) / ppq;
+    };
+
+    const all = [];
+    let endTick = 1;
+    tracks.forEach((track, trackIndex) => {
+      track.notes.forEach(note => {
+        endTick = Math.max(endTick, note.end);
+        all.push({
+          ...note,
+          track: trackIndex,
+          startSec: tickToSec(note.start),
+          endSec: tickToSec(note.end),
+        });
+      });
+      track.index = trackIndex;
+    });
+
+    const duration = Math.max(0.1, tickToSec(endTick));
+    const bpm = Math.round(60e6 / tempos[0].us);
+    return { tracks, notes: all, duration, bpm, ppq, format, declaredTracks };
+  }
+
+  /* ---------------- canvas helpers ---------------- */
+  function fitCanvas(canvas) {
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = Math.round(rect.width * dpr);
+    const h = Math.round(rect.height * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return { ctx, w: rect.width, h: rect.height };
+  }
+
+  function demoNotes() {
+    const notes = [];
+    const scale = [48, 50, 51, 53, 55, 56, 58, 60, 62, 63, 65, 67, 68, 70, 72, 74, 75, 77, 79, 80];
+    let t = 0;
+    for (let bar = 0; bar < 8; bar++) {
+      const chord = [scale[(bar * 3) % scale.length], scale[(bar * 3 + 2) % scale.length], scale[(bar * 3 + 4) % scale.length]];
+      for (const p of chord) notes.push({ startSec: t, endSec: t + 1.35, pitch: p, velocity: 70, track: 0 });
+      for (let i = 0; i < 4; i++) {
+        notes.push({ startSec: t + i * 0.5, endSec: t + i * 0.5 + 0.32, pitch: scale[(bar * 5 + i * 2) % scale.length] + 12, velocity: 52, track: 1 });
+      }
+      t += 2;
+    }
+    return { notes, duration: t, tracks: [{ name: "Ejemplo", notes: [] }, { name: "Ejemplo", notes: [] }] };
+  }
+
+  function drawRoll() {
+    const fit = fitCanvas(roll);
+    if (!fit) return;
+    const { ctx, w, h } = fit;
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = "#0e0f12";
+    ctx.fillRect(0, 0, w, h);
+
+    const isDemo = !state.midi && !state.previewFailed;
+    const data = state.midi || (state.previewFailed ? { notes: [], duration: 1, tracks: [] } : demoNotes());
+    const notes = data.notes;
+    const duration = Math.max(0.5, data.duration);
+    const padL = 42, padR = 16, padT = 18, padB = 28;
+    const plotW = Math.max(10, w - padL - padR);
+    const plotH = Math.max(10, h - padT - padB);
+
+    let lo = 48, hi = 84;
+    if (notes.length) {
+      lo = Math.min(...notes.map(n => n.pitch));
+      hi = Math.max(...notes.map(n => n.pitch));
+      lo = Math.max(21, lo - 2);
+      hi = Math.min(108, hi + 2);
+      if (hi - lo < 12) { const mid = (hi + lo) / 2; lo = Math.max(21, mid - 6); hi = Math.min(108, mid + 6); }
+    }
+    const rowH = plotH / Math.max(1, hi - lo + 1);
+    const yOf = pitch => padT + (hi - pitch) * rowH;
+    const xOf = sec => padL + (sec / duration) * plotW;
+
+    // octave rows + pitch labels
+    ctx.font = '11px "Instrument Sans", system-ui, sans-serif';
+    ctx.textBaseline = "middle";
+    for (let pitch = Math.ceil(lo / 12) * 12; pitch <= hi; pitch += 12) {
+      const y = yOf(pitch) + rowH / 2;
+      ctx.strokeStyle = "rgba(255,255,255,.055)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(padL, Math.round(y) + .5);
+      ctx.lineTo(w - padR, Math.round(y) + .5);
+      ctx.stroke();
+      ctx.fillStyle = "#6c717b";
+      ctx.fillText("C" + (pitch / 12 - 1), 8, y);
+    }
+
+    // time grid (every 2 seconds, plus quarter marks)
+    const step = duration > 90 ? 10 : duration > 36 ? 5 : 2;
+    ctx.textBaseline = "alphabetic";
+    for (let t = 0; t <= duration + 0.001; t += step) {
+      const x = xOf(t);
+      ctx.strokeStyle = "rgba(255,255,255,.045)";
+      ctx.beginPath();
+      ctx.moveTo(Math.round(x) + .5, padT);
+      ctx.lineTo(Math.round(x) + .5, h - padB);
+      ctx.stroke();
+    }
+    const labelStep = duration / 4;
+    ctx.fillStyle = "#6c717b";
+    for (let i = 0; i <= 4; i++) {
+      const t = Math.min(duration, i * labelStep);
+      const x = Math.max(padL, Math.min(w - padR, xOf(t)));
+      const label = fmtClock(t);
+      const tw = ctx.measureText(label).width;
+      ctx.fillText(label, i === 0 ? padL : i === 4 ? x - tw : x - tw / 2, h - 8);
+    }
+
+    // notes
+    const drawn = notes.slice().sort((a, b) => a.startSec - b.startSec);
+    for (const n of drawn) {
+      const x = xOf(n.startSec);
+      const x2 = xOf(n.endSec);
+      const yy = yOf(n.pitch);
+      const nw = Math.max(2, x2 - x - .6);
+      const nh = Math.max(2, rowH - 1);
+      let color = TRACK_COLORS[n.track % TRACK_COLORS.length];
+      if (isDemo) color = "#c8ff3d";
+      ctx.globalAlpha = isDemo ? .13 : .9;
+      ctx.fillStyle = color;
+      ctx.fillRect(x, yy + .5, nw, nh);
+      if (!isDemo) {
+        ctx.globalAlpha = .28;
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(x, yy + .5, nw, Math.min(1.5, nh * .35));
+      }
+    }
+    ctx.globalAlpha = 1;
+
+    // playhead
+    const playTime = state.playTime || 0;
+    if (!isDemo && state.midi && playTime > 0.02) {
+      const x = xOf(Math.min(playTime, duration));
+      ctx.strokeStyle = "#c8ff3d";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(Math.round(x) + .5, padT);
+      ctx.lineTo(Math.round(x) + .5, h - padB);
+      ctx.stroke();
+      ctx.fillStyle = "#c8ff3d";
+      ctx.beginPath();
+      ctx.moveTo(x - 4, padT);
+      ctx.lineTo(x + 4, padT);
+      ctx.lineTo(x, padT + 6);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
+  function drawWave() {
+    const fit = fitCanvas(wave);
+    if (!fit) return;
+    const { ctx, w, h } = fit;
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = "#0e0f12";
+    ctx.fillRect(0, 0, w, h);
+
+    const mid = h / 2;
+    ctx.strokeStyle = "rgba(255,255,255,.08)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, Math.round(mid) + .5);
+    ctx.lineTo(w, Math.round(mid) + .5);
+    ctx.stroke();
+
+    if (!state.peaks || !state.peaks.length) {
+      ctx.fillStyle = "#6c717b";
+      ctx.font = '11px "Instrument Sans", system-ui, sans-serif';
+      ctx.textAlign = "center";
+      ctx.fillText("La forma de onda aparecerá al renderizar", w / 2, mid - 7);
+      ctx.textAlign = "left";
+      return;
+    }
+
+    const peaks = state.peaks;
+    const barW = w / peaks.length;
+    const amp = (h - 26) / 2;
+    ctx.fillStyle = "rgba(200,255,61,.72)";
+    for (let i = 0; i < peaks.length; i++) {
+      const p = peaks[i];
+      const bh = Math.max(1, p * amp);
+      ctx.fillRect(i * barW, mid - bh, Math.max(1, barW - .7), bh * 2);
+    }
+
+    // time labels
+    ctx.fillStyle = "#6c717b";
+    ctx.font = '11px "Instrument Sans", system-ui, sans-serif';
+    const dur = state.waveDuration || (audio.duration || 0);
+    if (dur > 0) {
+      ctx.fillText("0:00", 8, h - 7);
+      const end = fmtClock(dur);
+      ctx.fillText(end, w - 8 - ctx.measureText(end).width, h - 7);
+    }
+
+    // playhead
+    if (dur > 0 && audio.currentTime > 0) {
+      const x = Math.min(w - .5, Math.max(.5, (audio.currentTime / dur) * w));
+      ctx.strokeStyle = "#c8ff3d";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(Math.round(x) + .5, 0);
+      ctx.lineTo(Math.round(x) + .5, h);
+      ctx.stroke();
+    }
+  }
+
+  async function loadWave(url) {
+    try {
+      if (!state.audioCtx) {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return;
+        state.audioCtx = new Ctx();
+      }
+      const response = await fetch(url);
+      if (!response.ok) return;
+      const buffer = await response.arrayBuffer();
+      const decoded = await state.audioCtx.decodeAudioData(buffer);
+      const channel = decoded.getChannelData(0);
+      const buckets = 460;
+      const step = Math.max(1, Math.floor(channel.length / buckets));
+      const peaks = new Float32Array(buckets);
+      for (let i = 0; i < buckets; i++) {
+        let max = 0;
+        const start = i * step;
+        const end = Math.min(channel.length, start + step);
+        for (let j = start; j < end; j += 3) {
+          const v = Math.abs(channel[j]);
+          if (v > max) max = v;
+        }
+        peaks[i] = max;
+      }
+      state.peaks = peaks;
+      state.waveDuration = decoded.duration;
+      drawWave();
+    } catch (error) {
+      state.peaks = null;
+      drawWave();
+    }
+  }
+
+  /* ---------------- UI state ---------------- */
+  function setStatus(message, kind = "", busy = false) {
+    statusEl.textContent = message;
+    statusEl.className = "status" + (kind ? " " + kind : "") + (busy ? " busy" : "");
+  }
+
+  function setProgress(value, label) {
+    const pct = Math.round(Math.max(0, Math.min(1, value)) * 100);
+    $("pbar").style.width = pct + "%";
+    $("progressPct").textContent = pct + "%";
+    if (label) $("progressLabel").textContent = label;
+  }
+
+  function showProgress(show) {
+    $("progressWrap").classList.toggle("show", show);
+    $("progressWrap").setAttribute("aria-hidden", show ? "false" : "true");
+  }
+
+  function setBusy(busy) {
+    btn.classList.toggle("busy", busy);
+    btn.disabled = busy || !state.file;
+    btn.querySelector(".btn-label").textContent = busy ? "Renderizando" : "Renderizar";
+  }
+
+  function resetResult() {
+    audio.pause();
+    audio.removeAttribute("src");
+    audio.load();
+    state.peaks = null;
+    state.waveDuration = 0;
+    $("player").classList.remove("show");
+    $("tracks").innerHTML = "";
+    $("stats").innerHTML = "";
+    $("trackCount").textContent = "";
+    drawWave();
+  }
+
+  function updateField(id) {
+    const el = $(id);
+    const value = Number(el.value);
+    const min = Number(el.min), max = Number(el.max);
+    el.style.setProperty("--p", ((value - min) / (max - min) * 100) + "%");
+    $("v_" + id).textContent = FMT[id](value);
+  }
+
+  function clearPreset() {
+    state.preset = null;
+    document.querySelectorAll(".preset").forEach(b => b.classList.remove("active"));
+    $("presetName").textContent = "Personalizado";
+  }
+
+  const PRESETS = {
+    classical: { label: "Clásico", ai: 0.7, reverb: 0.35, brightness: 0, warmth: 1, width: 0.15, loudness: -16, saturation: 0.2 },
+    jazz: { label: "Jazz", ai: 0.65, reverb: 0.25, brightness: 0, warmth: 2, width: 0.1, loudness: -14, saturation: 0.4 },
+    pop: { label: "Pop", ai: 0.45, reverb: 0.2, brightness: 2, warmth: 0, width: 0.25, loudness: -12, saturation: 0.6 },
+    cinematic: { label: "Cine", ai: 0.75, reverb: 0.45, brightness: 0, warmth: 1.5, width: 0.4, loudness: -16, saturation: 0.3 },
+    neutral: { label: "Neutral", ai: 0, reverb: 0.2, brightness: 0, warmth: 0, width: 0, loudness: -15, saturation: 0 },
+  };
+
+  function applyPreset(name) {
+    const preset = PRESETS[name];
+    if (!preset) return;
+    const ids = ["ai", "reverb", "brightness", "warmth", "width", "loudness", "saturation"];
+    for (const id of ids) {
+      $(id).value = String(preset[id]);
+      updateField(id);
+    }
+    state.preset = name;
+    document.querySelectorAll(".preset").forEach(b => b.classList.toggle("active", b.dataset.preset === name));
+    $("presetName").textContent = preset.label;
+  }
+
+  function renderLegend() {
+    const legend = $("legend");
+    if (!state.midi || !state.midi.tracks.length) {
+      legend.innerHTML = state.previewFailed
+        ? "<span>Vista previa no disponible para este archivo.</span>"
+        : "<span>La vista previa de las pistas aparecerá aquí.</span>";
+      return;
+    }
+    const tracks = state.midi.tracks
+      .map((track, index) => ({ ...track, colorIndex: index }))
+      .filter(track => track.notes.length);
+    if (!tracks.length) {
+      legend.innerHTML = "<span>El MIDI no contiene notas.</span>";
+      return;
+    }
+    const shown = tracks.slice(0, 6);
+    legend.innerHTML = shown.map(track => {
+      const name = track.name || ("Pista " + (track.colorIndex + 1));
+      return '<span class="item"><span class="dot" style="background:' + TRACK_COLORS[track.colorIndex % TRACK_COLORS.length] + '"></span>' + esc(name) + "</span>";
+    }).join("") + (tracks.length > 6 ? '<span class="more">+' + (tracks.length - 6) + "</span>" : "");
+  }
+
+  function colorForTrack(name, fallback) {
+    if (state.midi) {
+      const key = String(name || "").toLowerCase();
+      const match = state.midi.tracks.findIndex(track => track.notes.length && String(track.name || "").toLowerCase() === key);
+      if (match >= 0) return TRACK_COLORS[match % TRACK_COLORS.length];
+    }
+    return TRACK_COLORS[Math.max(0, Number(fallback) || 0) % TRACK_COLORS.length];
+  }
+
+  async function setFile(file) {
+    if (!/\.midi?$/i.test(file.name)) {
+      setStatus("Formato no válido. Usa un archivo .mid o .midi.", "error");
+      return;
+    }
+    if (file.size > MAX_UPLOAD) {
+      setStatus("El archivo supera el límite de 4 MB.", "error");
+      return;
+    }
+
+    resetResult();
+    state.file = file;
+    state.midi = null;
+    state.job = null;
+    state.playTime = 0;
+    state.previewFailed = false;
+    showProgress(false);
+    setBusy(false);
+    btn.disabled = true;
+    $("scoreEmpty").hidden = true;
+    $("fileName").textContent = file.name;
+    $("fileSub").textContent = fmtBytes(file.size);
+    $("chooseBtn").textContent = "Cambiar";
+    drop.style.cursor = "default";
+    drop.setAttribute("aria-label", "Archivo MIDI cargado. Arrastra otro para reemplazarlo.");
+
+    try {
+      state.buffer = await file.arrayBuffer();
+      state.midi = parseMidi(state.buffer);
+      const notes = state.midi.notes.length;
+      const withNotes = state.midi.tracks.filter(track => track.notes.length).length;
+      const totalTracks = state.midi.tracks.length;
+      const trackText = withNotes === totalTracks ? totalTracks + " pistas" : withNotes + " de " + totalTracks + " pistas";
+      $("fileSub").textContent = fmtBytes(file.size) + " · " + trackText + " · " + notes + " notas · " + fmtClock(state.midi.duration) + " · " + state.midi.bpm + " BPM";
+      renderLegend();
+      drawRoll();
+      setStatus("Listo. Ajusta la interpretación y renderiza.", "ok");
+    } catch (error) {
+      state.midi = null;
+      state.previewFailed = true;
+      state.buffer = await file.arrayBuffer().catch(() => null);
+      $("fileSub").textContent = fmtBytes(file.size) + " · vista previa no disponible";
+      renderLegend();
+      drawRoll();
+      setStatus("El archivo está cargado, pero no se pudo dibujar la vista previa. Puedes renderizarlo igualmente.", "error");
+    }
+
+    btn.disabled = false;
+    setBusy(false);
+  }
+
+  function clearFile() {
+    state.file = null;
+    state.buffer = null;
+    state.midi = null;
+    state.job = null;
+    state.playTime = 0;
+    state.previewFailed = false;
+    fileEl.value = "";
+    $("scoreEmpty").hidden = false;
+    $("fileName").textContent = "Sin archivo";
+    $("fileSub").textContent = "Arrastra un .mid aquí o elige uno";
+    $("chooseBtn").textContent = "Cargar MIDI";
+    drop.style.cursor = "pointer";
+    drop.setAttribute("aria-label", "Suelta un archivo MIDI o pulsa para elegirlo");
+    renderLegend();
+    drawRoll();
+    resetResult();
+    btn.disabled = true;
+    setBusy(false);
+    showProgress(false);
+    setStatus("Carga un MIDI para empezar.");
+  }
+
+  /* ---------------- render ---------------- */
+  function toBase64(buffer) {
+    const bytes = new Uint8Array(buffer);
+    let binary = "";
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    }
+    return btoa(binary);
+  }
+
+  function options() {
+    return {
+      ai_strength: Number($("ai").value),
+      reverb: Number($("reverb").value),
+      brightness: Number($("brightness").value),
+      warmth: Number($("warmth").value),
+      width: Number($("width").value),
+      loudness_db: Number($("loudness").value),
+      saturation: Number($("saturation").value),
+      sample_rate: 44100,
+      seed: 42,
+      use_model: Number($("ai").value) > 0,
+    };
+  }
+
+  async function startRender() {
+    if (!state.file || !state.buffer) return;
+    const file = state.file;
+    setBusy(true);
+    showProgress(true);
+    setProgress(0, "En cola");
+    setStatus("Enviando archivo…", "", true);
+
+    try {
+      const response = await fetch("/api/render", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: file.name,
+          data: toBase64(state.buffer),
+          options: options(),
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) throw new Error(data.error || "No se pudo iniciar el render (" + response.status + ")");
+      if (state.file !== file) return;
+      state.job = data.job_id;
+      poll();
+    } catch (error) {
+      if (state.file !== file) return;
+      fail(error.message);
+    }
+  }
+
+  async function poll() {
+    if (!state.job) return;
+    const jobId = state.job;
+    try {
+      const response = await fetch("/api/status?job=" + encodeURIComponent(jobId), { cache: "no-store" });
+      if (!response.ok) throw new Error("El trabajo expiró o no existe");
+      if (state.job !== jobId) return;
+      const job = await response.json();
+      const progress = Number(job.progress) || 0;
+      setProgress(progress);
+
+      if (job.status === "queued") {
+        setStatus("En cola · " + (job.queue_size || 0) + " pendiente(s)", "", true);
+        setProgress(progress, "En cola");
+        setTimeout(poll, 1000);
+      } else if (job.status === "running") {
+        setStatus("Renderizando interpretación…", "", true);
+        setProgress(progress, "Renderizando");
+        setTimeout(poll, 700);
+      } else if (job.status === "done") {
+        setProgress(1, "Listo");
+        finish(job);
+      } else {
+        throw new Error(job.error || "Error desconocido durante el render");
+      }
+    } catch (error) {
+      if (state.job !== jobId) return;
+      fail(error.message);
+    }
+  }
+
+  function finish(job) {
+    setStatus("Listo · " + job.elapsed + " s de render", "ok");
+    setBusy(false);
+    state.job = null;
+    setTimeout(() => showProgress(false), 900);
+
+    const base = (state.file?.name || "interpretacion").replace(/\.midi?$/i, "");
+    $("resultTitle").textContent = base + " · interpretación";
+    $("download").href = job.url;
+    $("download").setAttribute("download", job.outname || "output.wav");
+
+    $("stats").innerHTML = [
+      "<span>Duración <b>" + Number(job.duration).toFixed(1) + " s</b></span>",
+      "<span>BPM <b>" + job.bpm + "</b></span>",
+      "<span>Modelo <b>" + (job.model_used ? "IA" : "off") + "</b></span>",
+      "<span>Render <b>" + job.elapsed + " s</b></span>",
+    ].join("");
+
+    const tracks = job.tracks || [];
+    $("trackCount").textContent = tracks.length + (tracks.length === 1 ? " pista" : " pistas");
+    $("tracks").innerHTML = tracks.map((track, i) => {
+      const color = colorForTrack(track.name, track.index ?? i);
+      return "<tr>" +
+        '<td><span class="track-dot" style="background:' + color + '"></span>' + esc(track.instrument) + "</td>" +
+        '<td class="num">' + track.notes + "</td>" +
+        "<td>" + esc(track.name) + "</td>" +
+        "</tr>";
+    }).join("");
+
+    const player = $("player");
+    player.classList.add("show");
+    audio.src = job.url;
+    audio.load();
+    loadWave(job.url);
+
+    const play = () => audio.play().catch(() => {});
+    audio.addEventListener("canplay", play, { once: true });
+
+    if (player.getBoundingClientRect().bottom > window.innerHeight - 24) {
+      player.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
+
+  function fail(message) {
+    state.job = null;
+    setBusy(false);
+    showProgress(false);
+    setStatus(message || "Algo falló durante el render.", "error");
+  }
+
+  /* ---------------- audio + resizing ---------------- */
+  let rafId = 0;
+  function tick() {
+    if (audio.paused) { rafId = 0; return; }
+    state.playTime = audio.currentTime;
+    drawWave();
+    drawRoll();
+    rafId = requestAnimationFrame(tick);
+  }
+
+  audio.addEventListener("play", () => {
+    if (!rafId) rafId = requestAnimationFrame(tick);
+  });
+  audio.addEventListener("pause", () => {
+    state.playTime = audio.currentTime;
+    drawWave();
+    drawRoll();
+  });
+  audio.addEventListener("timeupdate", () => {
+    state.playTime = audio.currentTime;
+    drawWave();
+    if (!rafId) drawRoll();
+  });
+  audio.addEventListener("ended", () => {
+    state.playTime = 0;
+    drawWave();
+    drawRoll();
+  });
+
+  wave.addEventListener("click", event => {
+    if (!state.waveDuration || !audio.duration) return;
+    const rect = wave.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+    audio.currentTime = ratio * audio.duration;
+    state.playTime = audio.currentTime;
+    drawWave();
+    drawRoll();
+  });
+
+  roll.addEventListener("click", event => {
+    if (!state.file || !state.midi || !audio.duration || !state.midi.duration) return;
+    const rect = roll.getBoundingClientRect();
+    const padL = 42, padR = 16;
+    const plot = Math.max(1, rect.width - padL - padR);
+    const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left - padL) / plot));
+    audio.currentTime = ratio * audio.duration;
+    state.playTime = audio.currentTime;
+    drawWave();
+    drawRoll();
+  });
+
+  let resizeRaf = 0;
+  const onResize = () => {
+    if (resizeRaf) return;
+    resizeRaf = requestAnimationFrame(() => {
+      resizeRaf = 0;
+      drawRoll();
+      drawWave();
+    });
+  };
+  window.addEventListener("resize", onResize);
+  if ("ResizeObserver" in window) {
+    const observer = new ResizeObserver(onResize);
+    observer.observe(roll);
+    observer.observe(wave);
+  }
+
+  /* ---------------- events ---------------- */
+  drop.addEventListener("click", event => {
+    if (event.target.closest("button")) return;
+    if (!state.file) fileEl.click();
+  });
+  drop.addEventListener("keydown", event => {
+    if (!state.file && (event.key === "Enter" || event.key === " ")) {
+      event.preventDefault();
+      fileEl.click();
+    }
+  });
+
+  $("chooseBtn").addEventListener("click", event => {
+    event.stopPropagation();
+    fileEl.click();
+  });
+
+  fileEl.addEventListener("change", event => {
+    const file = event.target.files && event.target.files[0];
+    if (file) setFile(file);
+  });
+
+  ["dragenter", "dragover"].forEach(type => {
+    drop.addEventListener(type, event => {
+      event.preventDefault();
+      event.stopPropagation();
+      drop.classList.add("dragging");
+    });
+  });
+  ["dragleave", "drop"].forEach(type => {
+    drop.addEventListener(type, event => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (type === "dragleave" && drop.contains(event.relatedTarget)) return;
+      drop.classList.remove("dragging");
+    });
+  });
+  drop.addEventListener("drop", event => {
+    const file = event.dataTransfer?.files && event.dataTransfer.files[0];
+    if (file) setFile(file);
+  });
+
+  // prevent the browser from opening a dropped file outside the zone
+  window.addEventListener("dragover", event => event.preventDefault());
+  window.addEventListener("drop", event => {
+    if (!drop.contains(event.target)) event.preventDefault();
+  });
+
+  document.querySelectorAll(".preset").forEach(button => {
+    button.addEventListener("click", () => applyPreset(button.dataset.preset));
+  });
+
+  ["ai", "reverb", "brightness", "warmth", "width", "loudness", "saturation"].forEach(id => {
+    const el = $(id);
+    el.addEventListener("input", () => {
+      updateField(id);
+      clearPreset();
+    });
+    updateField(id);
+  });
+
+  btn.addEventListener("click", startRender);
+
+  /* ---------------- engine status ---------------- */
+  async function checkEngine() {
+    const engine = $("engine");
+    try {
+      const response = await fetch("/healthz", { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error("offline");
+      engine.className = "engine ok";
+      $("engineText").textContent = "Motor en línea";
+      engine.title = "Motor en línea · " + data.workers + " worker(s) · cola " + data.queue + "/" + data.queue_capacity;
+    } catch (error) {
+      engine.className = "engine err";
+      $("engineText").textContent = "Sin conexión";
+      engine.title = "No se pudo contactar con el motor de render";
+    }
+  }
+
+  checkEngine();
+  setInterval(checkEngine, 30000);
+
+  // first paint
+  drawRoll();
+  drawWave();
+})();
+</script>
+</body>
+</html>
