@@ -59,6 +59,10 @@ Opciones principales:
 --width 0           Amplitud estéreo (0..1)
 --loudness -15      Volumen objetivo RMS (dBFS)
 --saturation 0.5    Saturación tipo cinta (dB)
+--preset NAME       Preset de género (classical, jazz, pop, cinematic, neutral)
+--timing 0.6        Intensidad de micro-timing (0..1)
+--dynamics 0.6      Intensidad de dinámica (0..1)
+--articulation 0.6  Intensidad de articulación (0..1)
 --rate 44100        Frecuencia de muestreo
 --seed 42           Semilla aleatoria
 ```
@@ -78,6 +82,10 @@ El modelo de interpretación se entrena sobre las interpretaciones de piano del
 dataset **MAESTRO v3.0.0** (solo MIDI, ~56 MB):
 
 ```bash
+# Modelo secuencial (CNN 1D, recomendado)
+python train.py --seq --max-samples 4000000 --epochs 25 --batch 256
+
+# Modelo MLP clásico
 python train.py --max-samples 4000000 --epochs 25
 ```
 

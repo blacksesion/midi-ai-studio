@@ -5,7 +5,6 @@ Run with:  python -m midi_ai.web
 Serves a small single-page app: drag & drop a .mid file, tweak options, and
 render + audition the result in the browser.
 """
-
 from __future__ import annotations
 
 import base64
@@ -15,9 +14,10 @@ import re
 import tempfile
 import threading
 import time
+import uuid
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote
 
 from .pipeline import RenderOptions, render_file
 
@@ -25,10 +25,11 @@ HOST = os.environ.get("MIDI_AI_HOST", "127.0.0.1")
 PORT = int(os.environ.get("MIDI_AI_PORT", "8765"))
 
 _OUT_DIR = tempfile.mkdtemp(prefix="midiai_out_")
+_JOBS: dict = {}
+_JOBS_LOCK = threading.Lock()
 
 
 def _safe_name(name: str) -> str:
-    """Return a filesystem/URL-safe, ASCII-only base name."""
     name = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._")
     name = re.sub(r"_+", "_", name)
     return (name or "output")[:80]
@@ -62,7 +63,7 @@ cursor:pointer;transition:.15s;background:var(--panel2)}
 label{display:block;font-size:13px;color:var(--muted);margin:16px 0 6px}
 .row{display:flex;justify-content:space-between;font-size:13px}
 .row b{color:var(--text)}
-input[type=range]{width:100%;accent-color:var(--accent)}
+input[type=range],select{width:100%;accent-color:var(--accent)}
 button{width:100%;margin-top:20px;padding:13px;font-size:16px;font-weight:600;border:0;border-radius:10px;
 background:linear-gradient(90deg,var(--accent),#7a5bff);color:#fff;cursor:pointer;transition:.15s}
 button:hover{filter:brightness(1.1)}
@@ -80,6 +81,8 @@ th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--border)}
 th{color:var(--muted);font-weight:600}
 .stats{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;font-size:13px;color:var(--muted)}
 .stats b{color:var(--text);font-size:15px}
+.progress{margin-top:12px;height:8px;background:var(--panel2);border-radius:4px;overflow:hidden;display:none}
+.progress>div{height:100%;background:linear-gradient(90deg,var(--accent),#7a5bff);width:0%}
 </style>
 </head>
 <body>
@@ -103,7 +106,6 @@ th{color:var(--muted);font-weight:600}
           <audio id="audio" controls></audio>
           <div class="dl">
             <a id="download" href="#" download>Descargar WAV</a>
-            <a id="downloadmp3" href="#" download style="display:none">Descargar MP3</a>
           </div>
           <div class="stats" id="stats"></div>
           <div style="margin-top:14px">
@@ -116,6 +118,16 @@ th{color:var(--muted);font-weight:600}
 
     <div>
       <div class="card">
+        <label>Preset de g&eacute;nero</label>
+        <select id="preset">
+          <option value="">Personalizado</option>
+          <option value="classical">Cl&aacute;sico</option>
+          <option value="jazz">Jazz</option>
+          <option value="pop">Pop</option>
+          <option value="cinematic">Cinem&aacute;tico</option>
+          <option value="neutral">Neutral</option>
+        </select>
+
         <label>Intensidad de IA (expresi&oacute;n humana)</label>
         <div class="row"><span>0%</span><b id="v_ai">60%</b><span>100%</span></div>
         <input type="range" id="ai" min="0" max="1" step="0.05" value="0.6"/>
@@ -145,6 +157,7 @@ th{color:var(--muted);font-weight:600}
         <input type="range" id="saturation" min="0" max="3" step="0.5" value="0.5"/>
 
         <button id="renderBtn" disabled>Renderizar</button>
+        <div class="progress" id="progress"><div id="pbar"></div></div>
         <div class="status" id="status"></div>
       </div>
     </div>
@@ -153,7 +166,7 @@ th{color:var(--muted);font-weight:600}
 
 <script>
 const $=id=>document.getElementById(id);
-const state={file:null};
+const state={file:null,job:null};
 const drop=$('drop'),fileEl=$('file');
 drop.onclick=()=>fileEl.click();
 fileEl.onchange=e=>{if(e.target.files[0])setFile(e.target.files[0])};
@@ -174,6 +187,22 @@ function setFile(f){
   const upd=()=>$('v_'+id).textContent=fmt(el.value);
   el.addEventListener('input',upd);upd();
 });
+const PRESETS={classical:{ai:.7,reverb:.35,brightness:0,warmth:1,width:.15,loudness:-16,saturation:.2},
+ jazz:{ai:.65,reverb:.25,brightness:0,warmth:2,width:.1,loudness:-14,saturation:.4},
+ pop:{ai:.45,reverb:.2,brightness:2,warmth:0,width:.25,loudness:-12,saturation:.6},
+ cinematic:{ai:.75,reverb:.45,brightness:0,warmth:1.5,width:.4,loudness:-16,saturation:.3},
+ neutral:{ai:0,reverb:.2,brightness:0,warmth:0,width:0,loudness:-15,saturation:0}};
+$('preset').onchange=e=>{
+  const p=PRESETS[e.target.value]; if(!p) return;
+  $('ai').value=p.ai; $('reverb').value=p.reverb; $('brightness').value=p.brightness;
+  $('warmth').value=p.warmth; $('width').value=p.width; $('loudness').value=p.loudness;
+  $('saturation').value=p.saturation;
+  ['ai','reverb','brightness','warmth','width','loudness','saturation'].forEach(id=>{
+    const el=$(id); const upd=()=>$('v_'+id).textContent=
+      id==='loudness'?el.value+' dB':(id==='brightness'||id==='warmth'||id==='saturation')?(el.value>0?'+':'')+el.value+' dB':Math.round(el.value*100)+'%';
+    upd();
+  });
+};
 function status(msg,cls){const s=$('status');s.textContent=msg;s.className='status'+(cls?' '+cls:'');}
 function opts(){return{
   ai_strength:parseFloat($('ai').value),
@@ -187,7 +216,9 @@ function opts(){return{
 };}
 $('renderBtn').onclick=async()=>{
   if(!state.file)return;
-  const btn=$('renderBtn');btn.disabled=true;status('Renderizando... (puede tardar unos segundos)');
+  const btn=$('renderBtn');btn.disabled=true;
+  $('progress').style.display='block'; $('pbar').style.width='0%';
+  status('Enviando archivo...');
   const buf=await state.file.arrayBuffer();
   const b64=btoa(String.fromCharCode(...new Uint8Array(buf)));
   try{
@@ -195,24 +226,43 @@ $('renderBtn').onclick=async()=>{
       body:JSON.stringify({name:state.file.name,data:b64,options:opts()})});
     const j=await r.json();
     if(!j.ok){status('Error: '+(j.error||'desconocido'),'err');return}
-    const a=$('audio');a.src=j.url;a.onloadedmetadata=()=>a.play();
-    $('player').style.display='block';
-    $('download').href=j.url;
-    $('download').setAttribute('download',j.outname||'output.wav');
-    $('stats').innerHTML='<span>Duraci&oacute;n <b>'+j.duration+' s</b></span>'+
-      '<span>BPM <b>'+j.bpm+'</b></span>'+
-      '<span>IA <b>'+(j.model_used?'s&iacute;':'no')+'</b></span>'+
-      '<span>Tiempo <b>'+j.elapsed+' s</b></span>';
-    const tb=$('tracks');tb.innerHTML='<tr><th>Instrumento</th><th>Notas</th><th>Pista</th></tr>'+
-      j.tracks.map(t=>'<tr><td>'+t.instrument+'</td><td>'+t.notes+'</td><td>'+t.name+'</td></tr>').join('');
-    status('Renderizado correctamente','ok');
-  }catch(e){status('Error: '+e.message,'err')}
-  finally{btn.disabled=false}
+    state.job=j.job_id;
+    poll();
+  }catch(e){status('Error: '+e.message,'err');btn.disabled=false}
 };
+function poll(){
+  if(!state.job)return;
+  fetch('/api/status?job='+state.job).then(r=>r.json()).then(j=>{
+    if(j.progress!=null){$('pbar').style.width=Math.round(j.progress*100)+'%';}
+    if(j.status==='running'||j.status==='queued'){
+      status('Renderizando... '+Math.round((j.progress||0)*100)+'%');
+      setTimeout(poll,800);
+    } else if(j.status==='done'){
+      const a=$('audio');a.src=j.url;a.onloadedmetadata=()=>a.play();
+      $('player').style.display='block';
+      $('download').href=j.url;
+      $('download').setAttribute('download',j.outname||'output.wav');
+      $('stats').innerHTML='<span>Duraci&oacute;n <b>'+j.duration+' s</b></span>'+
+        '<span>BPM <b>'+j.bpm+'</b></span>'+
+        '<span>IA <b>'+(j.model_used?'s&iacute;':'no')+'</b></span>'+
+        '<span>Tiempo <b>'+j.elapsed+' s</b></span>';
+      const tb=$('tracks');tb.innerHTML='<tr><th>Instrumento</th><th>Notas</th><th>Pista</th></tr>'+
+        j.tracks.map(t=>'<tr><td>'+t.instrument+'</td><td>'+t.notes+'</td><td>'+t.name+'</td></tr>').join('');
+      status('Renderizado correctamente','ok');
+      $('renderBtn').disabled=false;
+      state.job=null;
+    } else {
+      status('Error: '+(j.error||'desconocido'),'err');
+      $('renderBtn').disabled=false;
+      state.job=null;
+    }
+  }).catch(e=>{status('Error: '+e.message,'err');$('renderBtn').disabled=false;state.job=null});
+}
 </script>
 </body>
 </html>
 """
+PAGE = PAGE
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -240,6 +290,15 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(200, f.read(), "audio/wav")
             else:
                 self._send(404, b"not found", "text/plain")
+        elif self.path.startswith("/api/status"):
+            qs = parse_qs(self.path.split("?", 1)[-1])
+            job_id = qs.get("job", [None])[0]
+            with _JOBS_LOCK:
+                job = _JOBS.get(job_id)
+            if not job:
+                self._send(404, json.dumps({"status": "unknown"}).encode(), "application/json")
+                return
+            self._send(200, json.dumps(job).encode(), "application/json")
         else:
             self._send(404, b"not found", "text/plain")
 
@@ -273,24 +332,46 @@ class Handler(BaseHTTPRequestHandler):
                 use_model=bool(o.get("use_model", True)),
             )
 
-            out_name = f"{name}_{int(time.time() * 1000)}.wav"
-            out_path = os.path.join(_OUT_DIR, out_name)
-            result = render_file(in_path, out_path, opts)
+            job_id = uuid.uuid4().hex
+            with _JOBS_LOCK:
+                _JOBS[job_id] = {"status": "queued", "progress": 0.0}
 
-            resp = {
-                "ok": True,
-                "url": f"/out/{out_name}",
-                "outname": out_name,
-                "duration": round(result.duration, 2),
-                "bpm": result.bpm,
-                "model_used": result.model_used,
-                "elapsed": round(result.elapsed, 2),
-                "tracks": result.tracks,
-            }
-            self._send(200, json.dumps(resp).encode("utf-8"), "application/json")
+            def worker():
+                with _JOBS_LOCK:
+                    _JOBS[job_id]["status"] = "running"
+                out_name = f"{name}_{int(time.time() * 1000)}.wav"
+                out_path = os.path.join(_OUT_DIR, out_name)
+                t0 = time.perf_counter()
+                try:
+                    opts.progress = lambda f: _update_progress(job_id, f)
+                    result = render_file(in_path, out_path, opts)
+                    elapsed = time.perf_counter() - t0
+                    with _JOBS_LOCK:
+                        _JOBS[job_id].update({
+                            "status": "done",
+                            "progress": 1.0,
+                            "url": f"/out/{out_name}",
+                            "outname": out_name,
+                            "duration": round(result.duration, 2),
+                            "bpm": result.bpm,
+                            "model_used": result.model_used,
+                            "elapsed": round(elapsed, 2),
+                            "tracks": result.tracks,
+                        })
+                except Exception as e:  # noqa: BLE001
+                    with _JOBS_LOCK:
+                        _JOBS[job_id].update({"status": "error", "error": str(e)})
+
+            def _update_progress(jid, frac):
+                with _JOBS_LOCK:
+                    if jid in _JOBS:
+                        _JOBS[jid]["progress"] = frac
+
+            threading.Thread(target=worker, daemon=True).start()
+            self._send(200, json.dumps({"ok": True, "job_id": job_id}).encode(), "application/json")
         except Exception as e:  # noqa: BLE001
             resp = {"ok": False, "error": str(e)}
-            self._send(200, json.dumps(resp).encode("utf-8"), "application/json")
+            self._send(200, json.dumps(resp).encode(), "application/json")
 
 
 def main():

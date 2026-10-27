@@ -297,10 +297,121 @@ def rms(x: np.ndarray) -> float:
     return float(np.sqrt(np.mean(np.square(x)) + EPS))
 
 
+def deesser(x: np.ndarray, sr: float, freq: float = 7000.0, threshold_db: float = -24.0,
+            ratio: float = 3.0) -> np.ndarray:
+    """Simple de-esser: compress a high band around `freq`."""
+    # Split: low (below freq) + high (above freq)
+    low = apply_eq(x, sr, [(freq, "lowpass", 0.707)])
+    high = x - low
+    high_c = compressor(high, sr, threshold_db=threshold_db, ratio=ratio,
+                        attack_ms=5.0, release_ms=40.0)
+    return (low + high_c).astype(np.float32)
+
+
+def multiband_compressor(x: np.ndarray, sr: float, threshold_db: float = -20.0,
+                        ratio: float = 2.0) -> np.ndarray:
+    """3-band (low/mid/high) compressor summed back."""
+    lo = apply_eq(x, sr, [(200.0, "lowpass", 0.707)])
+    hi = apply_eq(x, sr, [(4000.0, "highpass", 0.707)])
+    mid = x - lo - hi
+    lo_c = compressor(lo, sr, threshold_db=threshold_db, ratio=ratio, attack_ms=30.0, release_ms=250.0)
+    mid_c = compressor(mid, sr, threshold_db=threshold_db, ratio=ratio, attack_ms=20.0, release_ms=180.0)
+    hi_c = compressor(hi, sr, threshold_db=threshold_db + 2.0, ratio=ratio + 0.5, attack_ms=10.0, release_ms=120.0)
+    return (lo_c + mid_c + hi_c).astype(np.float32)
+
+
 def normalize_rms(x: np.ndarray, target_rms: float = 0.18, peak_ceiling: float = 0.98) -> np.ndarray:
     g = target_rms / max(rms(x), EPS)
     out = x * g
     peak = np.max(np.abs(out))
     if peak > peak_ceiling:
         out *= peak_ceiling / peak
+    return out.astype(np.float32)
+
+
+def _k_weight(x: np.ndarray, sr: float) -> np.ndarray:
+    y = apply_eq(x, sr, [(38.0, "highpass", 0.5)])
+    y = apply_eq(y, sr, [(4000.0, "highshelf", 0.707, 4.0)])
+    return y
+
+
+def lufs(x: np.ndarray, sr: float) -> float:
+    y = _k_weight(x, sr)
+    if y.ndim == 2:
+        ms = float(np.mean(np.square(y)))
+    else:
+        ms = float(np.mean(np.square(y)))
+    return -0.691 + 10.0 * np.log10(ms + EPS)
+
+
+def normalize_lufs(x: np.ndarray, sr: float, target_lufs: float = -14.0,
+                   peak_ceiling: float = 0.97) -> np.ndarray:
+    cur = lufs(x, sr)
+    gain = 10.0 ** ((target_lufs - cur) / 20.0)
+    out = x * gain
+    peak = np.max(np.abs(out))
+    if peak > peak_ceiling:
+        out *= peak_ceiling / peak
+    return out.astype(np.float32)
+
+
+def master_loudness(x: np.ndarray, sr: float, target_lufs: float = -14.0,
+                    ceiling_db: float = -1.0, iterations: int = 4) -> np.ndarray:
+    """Iteratively gain + limit until the target LUFS is reached.
+
+    Limiting reduces loudness slightly, so a single gain pass undershoots.
+    Repeating gain -> limiter converges to the requested integrated loudness
+    while keeping true peaks below the ceiling.
+    """
+    out = np.asarray(x, dtype=np.float32)
+    for _ in range(iterations):
+        cur = lufs(out, sr)
+        if abs(cur - target_lufs) < 0.1:
+            break
+        gain = 10.0 ** ((target_lufs - cur) / 20.0)
+        out = (out * gain).astype(np.float32)
+        out = true_peak_limiter(out, sr, ceiling_db=ceiling_db)
+    # Final safety clamp.
+    peak = float(np.max(np.abs(out))) if out.size else 0.0
+    ceil = db_to_amp(ceiling_db)
+    if peak > ceil:
+        out = (out * (ceil / peak)).astype(np.float32)
+    return out
+
+
+def true_peak_limiter(x: np.ndarray, sr: float, ceiling_db: float = -1.0,
+                      oversample: int = 4) -> np.ndarray:
+    """Look-ahead limiter using oversampled peak detection."""
+    from scipy.signal import resample_poly
+
+    x = np.asarray(x, dtype=np.float32)
+    if x.size == 0:
+        return x
+    up = resample_poly(x, oversample, 1, axis=0).astype(np.float32)
+    # detect peaks on upsampled signal
+    peak_up = np.max(np.abs(up), axis=1) if up.ndim == 2 else np.abs(up)
+    from scipy.ndimage import maximum_filter1d
+    look = max(2, int(0.004 * sr * oversample) + 1)
+    future = maximum_filter1d(peak_up, size=look, mode="nearest")
+    ceil = db_to_amp(ceiling_db)
+    target = np.ones_like(future)
+    mask = future > ceil
+    target[mask] = ceil / future[mask]
+    # downsample gain back to original rate by block max
+    n = len(x)
+    gain_up = target
+    # aggregate per original sample: min gain in each oversample block
+    gain = gain_up.reshape(n, oversample).min(axis=1)
+    # smooth
+    hop = 1
+    alpha = 0.05
+    g = 1.0
+    out_gain = np.empty(n, dtype=np.float64)
+    for i in range(n):
+        g = gain[i] if gain[i] < g else g + alpha * (gain[i] - g)
+        out_gain[i] = g
+    if x.ndim == 2:
+        out = x * out_gain[:, None]
+    else:
+        out = x * out_gain
     return out.astype(np.float32)

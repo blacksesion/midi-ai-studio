@@ -48,6 +48,9 @@ def soundfont_path() -> str:
 
 
 def model_path() -> str:
+    env = os.environ.get("MIDI_AI_MODEL")
+    if env:
+        return env if os.path.isabs(env) else os.path.join(asset_dir(), "models", env)
     return os.path.join(asset_dir(), "models", "performance.pt")
 
 

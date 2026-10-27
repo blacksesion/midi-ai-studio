@@ -7,6 +7,8 @@ computed identically for training data and for arbitrary input MIDI.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 
 FEATURE_NAMES = [
@@ -17,6 +19,13 @@ FEATURE_NAMES = [
 N_FEATURES = len(FEATURE_NAMES)
 
 GRID = 0.25  # 16th-note grid in quarter-note beats
+
+
+@dataclass
+class MechNote:
+    start: float
+    end: float
+    pitch: int
 
 
 def _clip(x: float, lo: float, hi: float) -> float:
@@ -96,6 +105,22 @@ def note_features(
 
 def _clip_vec(x: np.ndarray, lo: float, hi: float) -> np.ndarray:
     return np.clip(x, lo, hi)
+
+
+def quantize_to_grid(notes, bpm: float, grid: float = GRID) -> list:
+    """Build a mechanical (quantised) reference from a list of notes.
+
+    Returns a list of :class:`MechNote` objects suitable for :func:`note_features`.
+    """
+    out = []
+    for n in notes:
+        onset_beat = n.start * bpm / 60.0
+        mech_beat = round(onset_beat / grid) * grid
+        mech_start = mech_beat * 60.0 / bpm
+        dur_beats = max(grid, round(max(1e-4, (n.end - n.start) * bpm / 60.0) / grid) * grid)
+        mech_dur = dur_beats * 60.0 / bpm
+        out.append(MechNote(mech_start, mech_start + mech_dur, n.pitch))
+    return out
 
 
 def piece_velocity_stats(velocities: np.ndarray) -> tuple[float, float]:

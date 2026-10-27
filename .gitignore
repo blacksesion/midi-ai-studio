@@ -8,3 +8,4 @@ assets/soundfonts/*.sf3
 assets/soundfonts/*.sf2
 tmp/
 *.wav
+*.log

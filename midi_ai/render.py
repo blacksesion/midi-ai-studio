@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
@@ -21,6 +22,7 @@ CHANNELS = 2
 
 _synth_cache: dict[tuple, tinysoundfont.Synth] = {}
 _synth_lock = threading.RLock()
+_thread_local = threading.local()
 
 
 def make_synth(sf_path: str, samplerate: int = DEFAULT_SAMPLERATE,
@@ -80,7 +82,9 @@ def render_track_stem(
         idx = int(round(sec * sr))
         events.append((idx, "cc", (cc, val)))
 
-    events.sort(key=lambda e: e[0])
+    # Sort by time; for ties: note_off (0) < cc (1) < note_on (2).
+    prio = {"off": 0, "cc": 1, "on": 2}
+    events.sort(key=lambda e: (e[0], prio.get(e[1], 1)))
 
     chunks: list[np.ndarray] = []
     cur = 0
@@ -100,17 +104,32 @@ def render_track_stem(
     return np.concatenate(chunks, axis=0).astype(np.float32)
 
 
+def _thread_synth(sf_path: str, samplerate: int, synth_gain_db: float):
+    key = (os.path.abspath(sf_path), samplerate, synth_gain_db)
+    if getattr(_thread_local, "key", None) != key:
+        _thread_local.synth, _thread_local.sfid = make_synth(sf_path, samplerate, synth_gain_db)
+        _thread_local.key = key
+    return _thread_local.synth, _thread_local.sfid
+
+
 def render_song_stems(
     song,
     sf_path: str,
     samplerate: int = DEFAULT_SAMPLERATE,
     synth_gain_db: float = 6.0,
     tail_seconds: float = 2.5,
+    parallel: bool = True,
 ) -> list[np.ndarray]:
-    """Render every track of a Song to a stem (SoundFont loaded once)."""
-    with _synth_lock:
+    """Render every track of a Song to a stem (SoundFont loaded per thread)."""
+    tracks = list(song.tracks)
+
+    def _render(t):
+        synth, sfid = _thread_synth(sf_path, samplerate, synth_gain_db)
+        return render_track_stem(synth, sfid, t, samplerate, tail_seconds)
+
+    if not parallel or len(tracks) <= 1:
         synth, sfid = get_synth(sf_path, samplerate, synth_gain_db)
-        return [
-            render_track_stem(synth, sfid, t, samplerate, tail_seconds)
-            for t in song.tracks
-        ]
+        return [render_track_stem(synth, sfid, t, samplerate, tail_seconds) for t in tracks]
+
+    with ThreadPoolExecutor(max_workers=min(4, len(tracks))) as ex:
+        return list(ex.map(_render, tracks))
