@@ -34,19 +34,28 @@ def _pad_to(stem: np.ndarray, length: int) -> np.ndarray:
 
 
 def mix_and_master(
-    stems: list[np.ndarray],
+    stems,
     tracks,
     samplerate: int,
     ir: np.ndarray,
     options: MixOptions | None = None,
+    max_len: int | None = None,
 ) -> np.ndarray:
+    """Mix per-track stems and master the result.
+
+    ``stems`` may be a list or an iterator. When ``max_len`` is given the
+    stems are consumed one at a time, so a long multi-track song never holds
+    every stem in memory at once.
+    """
     options = options or MixOptions()
     sr = samplerate
 
-    if not stems:
-        return np.zeros((sr, 2), dtype=np.float32)
+    if max_len is None:
+        stems = list(stems)
+        if not stems:
+            return np.zeros((sr, 2), dtype=np.float32)
+        max_len = max(s.shape[0] for s in stems)
 
-    max_len = max(s.shape[0] for s in stems)
     dry = np.zeros((max_len, 2), dtype=np.float32)
     reverb_bus = np.zeros((max_len, 2), dtype=np.float32)
 
@@ -66,6 +75,7 @@ def mix_and_master(
         send = preset.reverb * options.reverb
         if send > 0:
             reverb_bus += stem * send
+        del stem
 
     ir_len = ir.shape[0] if ir.ndim >= 1 else 1
     total_len = max_len + max(0, ir_len - 1)
@@ -81,6 +91,9 @@ def mix_and_master(
             wet = wet * (dry_rms / wet_rms) * 0.9
 
     mix = dry + wet
+    # Release the intermediate buses before the (buffer-hungry) mastering
+    # chain runs; for long songs each one is tens of MB.
+    del dry, wet, reverb_bus
 
     mix = dsp.apply_eq(mix, sr, [(28.0, "highpass", 0.707)])
     if options.warmth:

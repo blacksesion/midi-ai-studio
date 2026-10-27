@@ -9,4 +9,5 @@ assets/soundfonts/*.sf2
 tmp/
 *.wav
 *.log
+assets/cache/
 .github/

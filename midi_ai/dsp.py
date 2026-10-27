@@ -379,39 +379,86 @@ def master_loudness(x: np.ndarray, sr: float, target_lufs: float = -14.0,
     return out
 
 
+def _inter_sample_peak(x: np.ndarray, block: int = 1 << 18) -> np.ndarray:
+    """Approximate the true peak with 4x cubic (Catmull-Rom) interpolation.
+
+    The naive approach of upsampling the whole signal at 4x allocates several
+    copies of a 4x-length buffer, which is catastrophic for multi-minute
+    songs. This walks the signal in blocks and keeps a single float32 peak
+    envelope, bounding extra memory to a few megabytes.
+    """
+    x = np.asarray(x, dtype=np.float32)
+    if x.ndim == 1:
+        x = x[:, None]
+    n = x.shape[0]
+    out = np.empty(n, dtype=np.float32)
+    if n == 0:
+        return out
+    for start in range(0, n, block):
+        end = min(n, start + block)
+        s = max(0, start - 1)
+        e = min(n, end + 2)
+        seg = x[s:e]
+        if seg.shape[0] < 4:
+            seg = np.pad(seg, ((0, 4 - seg.shape[0]), (0, 0)))
+        x0 = np.empty_like(seg)
+        x0[1:] = seg[:-1]
+        x0[0] = seg[0]
+        x1 = seg
+        x2 = np.empty_like(seg)
+        x2[:-1] = seg[1:]
+        x2[-1] = seg[-1]
+        x3 = np.empty_like(seg)
+        x3[1:-1] = seg[2:]
+        x3[0] = seg[0]
+        x3[-1] = seg[-1]
+        peak = np.abs(x1).max(axis=1)
+        for t in (0.25, 0.5, 0.75):
+            y = 0.5 * (2.0 * x1 + (-x0 + x2) * t
+                       + (2.0 * x0 - 5.0 * x1 + 4.0 * x2 - x3) * (t * t)
+                       + (-x0 + 3.0 * x1 - 3.0 * x2 + x3) * (t * t * t))
+            np.maximum(peak, np.abs(y).max(axis=1), out=peak)
+        off = start - s
+        out[start:end] = peak[off:off + (end - start)]
+    return out
+
+
 def true_peak_limiter(x: np.ndarray, sr: float, ceiling_db: float = -1.0,
                       oversample: int = 4) -> np.ndarray:
-    """Look-ahead limiter using oversampled peak detection."""
-    from scipy.signal import resample_poly
+    """Memory-bounded look-ahead limiter with inter-sample peak detection.
+
+    ``oversample`` is kept for API compatibility; peak detection always uses
+    the 4x cubic approximation.
+    """
+    from scipy.ndimage import maximum_filter1d, minimum_filter1d
+    from scipy.signal import lfilter
 
     x = np.asarray(x, dtype=np.float32)
     if x.size == 0:
         return x
-    up = resample_poly(x, oversample, 1, axis=0).astype(np.float32)
-    # detect peaks on upsampled signal
-    peak_up = np.max(np.abs(up), axis=1) if up.ndim == 2 else np.abs(up)
-    from scipy.ndimage import maximum_filter1d
-    look = max(2, int(0.004 * sr * oversample) + 1)
-    future = maximum_filter1d(peak_up, size=look, mode="nearest")
+
     ceil = db_to_amp(ceiling_db)
-    target = np.ones_like(future)
-    mask = future > ceil
-    target[mask] = ceil / future[mask]
-    # downsample gain back to original rate by block max
-    n = len(x)
-    gain_up = target
-    # aggregate per original sample: min gain in each oversample block
-    gain = gain_up.reshape(n, oversample).min(axis=1)
-    # smooth
-    hop = 1
-    alpha = 0.05
-    g = 1.0
-    out_gain = np.empty(n, dtype=np.float64)
-    for i in range(n):
-        g = gain[i] if gain[i] < g else g + alpha * (gain[i] - g)
-        out_gain[i] = g
+    peak = _inter_sample_peak(x)
+    look = max(2, int(0.004 * sr) + 1)
+    future = maximum_filter1d(peak, size=look, mode="nearest")
+    del peak
+
+    # Target gain (<= 1) at every sample.
+    gain = np.minimum(1.0, ceil / np.maximum(future, 1e-9)).astype(np.float32)
+    del future
+
+    # Instant attack (hold the minimum over the look-ahead window) and a
+    # smooth one-pole release. Taking the element-wise min guarantees the
+    # gain never exceeds the requirement while avoiding a hard release.
+    hold = minimum_filter1d(gain, size=look, mode="nearest")
+    alpha = np.float32(0.2)
+    smooth = lfilter([alpha], [np.float32(1.0), np.float32(-(1.0 - alpha))],
+                     gain, zi=[(1.0 - alpha) * np.float32(1.0)])[0].astype(np.float32)
+    out_gain = np.minimum(smooth, hold)
+    del gain, hold, smooth
+
     if x.ndim == 2:
         out = x * out_gain[:, None]
     else:
         out = x * out_gain
-    return out.astype(np.float32)
+    return out.astype(np.float32, copy=False)

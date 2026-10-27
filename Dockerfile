@@ -31,7 +31,8 @@ ENV MALLOC_ARENA_MAX=2 \
     MIDI_AI_TORCH_THREADS=2 \
     MIDI_AI_WORKERS=1 \
     MIDI_AI_MAX_PENDING=6 \
-    MIDI_AI_MAX_UPLOAD=4194304
+    MIDI_AI_MAX_UPLOAD=4194304 \
+    MIDI_AI_MAX_DURATION=300
 
 # Application code + the pre-trained model checkpoint.
 COPY midi_ai ./midi_ai

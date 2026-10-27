@@ -145,3 +145,20 @@ def render_song_stems(
 
     with ThreadPoolExecutor(max_workers=min(4, len(tracks))) as ex:
         return list(ex.map(_render, tracks))
+
+
+def render_song_stems_iter(
+    song,
+    sf_path: str,
+    samplerate: int = DEFAULT_SAMPLERATE,
+    synth_gain_db: float = 6.0,
+    tail_seconds: float = 2.5,
+):
+    """Yield one stem at a time, reusing a single synth.
+
+    The caller can mix/accumulate each stem and let it be garbage-collected,
+    which keeps peak memory independent of the number of tracks.
+    """
+    synth, sfid = _thread_synth(sf_path, samplerate, synth_gain_db)
+    for track in song.tracks:
+        yield render_track_stem(synth, sfid, track, samplerate, tail_seconds)

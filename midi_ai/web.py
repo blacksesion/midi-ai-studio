@@ -31,6 +31,7 @@ MAX_PENDING = int(os.environ.get("MIDI_AI_MAX_PENDING", "6"))
 WORKERS = max(1, int(os.environ.get("MIDI_AI_WORKERS", "1")))
 MAX_OUT_FILES = int(os.environ.get("MIDI_AI_MAX_OUT_FILES", "40"))
 OUT_TTL = int(os.environ.get("MIDI_AI_OUT_TTL", "3600"))
+MAX_DURATION = float(os.environ.get("MIDI_AI_MAX_DURATION", "300"))
 
 _OUT_DIR = tempfile.mkdtemp(prefix="midiai_out_")
 _JOBS: dict = {}
@@ -449,6 +450,7 @@ class Handler(BaseHTTPRequestHandler):
                 sample_rate=int(o.get("sample_rate", 44100)),
                 seed=int(o.get("seed", 42)),
                 use_model=bool(o.get("use_model", True)),
+                max_duration=MAX_DURATION,
             )
 
             job_id = uuid.uuid4().hex

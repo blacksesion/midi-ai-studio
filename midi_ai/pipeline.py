@@ -19,7 +19,7 @@ from .assets import ensure_model, ensure_soundfont
 from .features import note_features, piece_velocity_stats
 from .midi_parse import Song, load_midi, summarize
 from .mix import MixOptions, mix_and_master
-from .render import DEFAULT_SAMPLERATE, render_song_stems
+from .render import DEFAULT_SAMPLERATE, render_song_stems, render_song_stems_iter
 
 
 @dataclass
@@ -42,6 +42,7 @@ class RenderOptions:
     seed: int | None = 42
     use_model: bool = True
     cache: bool = True
+    max_duration: float | None = 900.0  # seconds; None disables the guard
     progress: object = None  # optional callable (frac: float) -> None
 
     def mix_options(self) -> MixOptions:
@@ -160,14 +161,32 @@ def render_song(
     _p(0.35)
 
     sf_path = sf_path or ensure_soundfont()
-    stems = render_song_stems(song, sf_path, samplerate=opts.sample_rate)
+
+    # On small machines (and for long files) render/mix stems one at a time so
+    # peak memory does not scale with track count.
+    env_parallel = os.environ.get("MIDI_AI_PARALLEL_STEMS")
+    if env_parallel is None:
+        parallel = (os.cpu_count() or 1) >= 4 and len(song.tracks) > 1
+    else:
+        parallel = env_parallel not in ("0", "false", "False") and len(song.tracks) > 1
+    tail = 2.5
+    if parallel:
+        stems = render_song_stems(song, sf_path, samplerate=opts.sample_rate,
+                                  parallel=True)
+        max_len = None
+    else:
+        end = max((n.end for t in song.tracks for n in t.notes), default=0.0)
+        max_len = int((end + tail) * opts.sample_rate) + 2
+        stems = render_song_stems_iter(song, sf_path, samplerate=opts.sample_rate,
+                                       tail_seconds=tail)
     _p(0.7)
 
     if ir is None:
         ir = dsp.make_ir(opts.sample_rate, rt60=1.5 + 2.0 * opts.reverb_size,
                          pre_delay_ms=18.0, seed=7)
 
-    audio = mix_and_master(stems, song.tracks, opts.sample_rate, ir, opts.mix_options())
+    audio = mix_and_master(stems, song.tracks, opts.sample_rate, ir,
+                           opts.mix_options(), max_len=max_len)
     _p(1.0)
 
     return RenderResult(
@@ -202,12 +221,17 @@ def get_model():
         return _MODEL_CACHE["model"]
 
 
+CACHE_VERSION = 2  # bump when the render/mix chain changes audibly
+
+
 def _cache_key(midi_path: str, opts: RenderOptions) -> str:
     import hashlib, json
     h = hashlib.sha256()
     with open(midi_path, "rb") as f:
         h.update(f.read())
-    h.update(json.dumps(opts.__dict__, sort_keys=True, default=str).encode())
+    data = {k: v for k, v in opts.__dict__.items() if k != "progress"}
+    data["_cache_version"] = CACHE_VERSION
+    h.update(json.dumps(data, sort_keys=True, default=str).encode())
     return h.hexdigest()
 
 
@@ -236,6 +260,14 @@ def _prune_cache(cdir: str, max_files: int = 20, max_mb: int = 300):
                 pass
 
 
+def _check_duration(song: Song, opts: RenderOptions):
+    if opts.max_duration and song.total_seconds > opts.max_duration:
+        raise ValueError(
+            f"song is {song.total_seconds / 60.0:.1f} min long; "
+            f"the limit is {opts.max_duration / 60.0:.1f} min"
+        )
+
+
 def render_file(
     midi_path: str,
     out_path: str | None = None,
@@ -259,6 +291,7 @@ def render_file(
         if audio.ndim == 1:
             audio = np.stack([audio, audio], axis=1)
         song = load_midi(midi_path)
+        _check_duration(song, opts)
         result = RenderResult(
             audio=audio, sample_rate=sr,
             duration=float(len(audio) / sr), tracks=summarize(song),
@@ -270,6 +303,7 @@ def render_file(
         return result
 
     song = load_midi(midi_path)
+    _check_duration(song, opts)
 
     model = None
     if opts.use_model and opts.humanize and opts.ai_strength > 0:
