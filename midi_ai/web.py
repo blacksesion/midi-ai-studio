@@ -91,6 +91,12 @@ def _set_job(job_id: str, **fields):
 
 
 def _worker_loop():
+    # Lower the render thread's priority so HTTP/health checks stay snappy
+    # while a heavy render is running (POSIX only).
+    try:
+        os.nice(10)
+    except (AttributeError, OSError):
+        pass
     while True:
         job_id, in_path, out_path, opts, out_name = _QUEUE.get()
         try:
