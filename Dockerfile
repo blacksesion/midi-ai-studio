@@ -22,6 +22,17 @@ RUN pip install --no-cache-dir numpy==1.26.4 scipy==1.16.3 mido soundfile
 # (never its pyaudio-based playback), so skip pyaudio to avoid a source build.
 RUN pip install --no-cache-dir --no-deps tinysoundfont
 
+# Resource limits for small CPU instances. Kept after the pip layers so that
+# changing them does not invalidate the expensive dependency cache.
+ENV MALLOC_ARENA_MAX=2 \
+    OMP_NUM_THREADS=2 \
+    MKL_NUM_THREADS=2 \
+    OPENBLAS_NUM_THREADS=2 \
+    MIDI_AI_TORCH_THREADS=2 \
+    MIDI_AI_WORKERS=1 \
+    MIDI_AI_MAX_PENDING=6 \
+    MIDI_AI_MAX_UPLOAD=4194304
+
 # Application code + the pre-trained model checkpoint.
 COPY midi_ai ./midi_ai
 COPY assets ./assets
@@ -32,5 +43,8 @@ RUN mkdir -p /app/assets/soundfonts \
        https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/MuseScore_General.sf3
 
 EXPOSE 8765
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/healthz', timeout=4)"
 
 CMD ["python", "-m", "midi_ai.web"]

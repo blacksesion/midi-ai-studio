@@ -20,6 +20,11 @@ from .midi_parse import Track
 DEFAULT_SAMPLERATE = 44100
 CHANNELS = 2
 
+# Each synth holds a full decompressed copy of the SoundFont, so keep the voice
+# count modest: 128 voices is far more than a single track needs and greatly
+# reduces the memory footprint on small servers.
+MAX_VOICES = int(os.environ.get("MIDI_AI_MAX_VOICES", "128"))
+
 _synth_cache: dict[tuple, tinysoundfont.Synth] = {}
 _synth_lock = threading.RLock()
 _thread_local = threading.local()
@@ -28,7 +33,7 @@ _thread_local = threading.local()
 def make_synth(sf_path: str, samplerate: int = DEFAULT_SAMPLERATE,
                synth_gain_db: float = 6.0) -> tuple[tinysoundfont.Synth, int]:
     synth = tinysoundfont.Synth(gain=synth_gain_db, samplerate=samplerate)
-    sfid = synth.sfload(sf_path, max_voices=512)
+    sfid = synth.sfload(sf_path, max_voices=MAX_VOICES)
     return synth, sfid
 
 
@@ -118,17 +123,24 @@ def render_song_stems(
     samplerate: int = DEFAULT_SAMPLERATE,
     synth_gain_db: float = 6.0,
     tail_seconds: float = 2.5,
-    parallel: bool = True,
+    parallel: bool | None = None,
 ) -> list[np.ndarray]:
-    """Render every track of a Song to a stem (SoundFont loaded per thread)."""
+    """Render every track of a Song to a stem (SoundFont loaded per thread).
+
+    Parallel stem rendering means one SoundFont copy per worker, which is a
+    memory amplifier. On machines with fewer than 4 CPUs (e.g. small cloud
+    instances) we render sequentially and reuse a single synth.
+    """
     tracks = list(song.tracks)
+    if parallel is None:
+        parallel = (os.cpu_count() or 1) >= 4
 
     def _render(t):
         synth, sfid = _thread_synth(sf_path, samplerate, synth_gain_db)
         return render_track_stem(synth, sfid, t, samplerate, tail_seconds)
 
     if not parallel or len(tracks) <= 1:
-        synth, sfid = get_synth(sf_path, samplerate, synth_gain_db)
+        synth, sfid = _thread_synth(sf_path, samplerate, synth_gain_db)
         return [render_track_stem(synth, sfid, t, samplerate, tail_seconds) for t in tracks]
 
     with ThreadPoolExecutor(max_workers=min(4, len(tracks))) as ex:

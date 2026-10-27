@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import queue
 import re
 import tempfile
 import threading
@@ -24,15 +25,110 @@ from .pipeline import RenderOptions, render_file
 HOST = os.environ.get("MIDI_AI_HOST", "127.0.0.1")
 PORT = int(os.environ.get("MIDI_AI_PORT", "8765"))
 
+# Hard limits so a small server cannot be overwhelmed by concurrent renders.
+MAX_UPLOAD = int(os.environ.get("MIDI_AI_MAX_UPLOAD", str(4 * 1024 * 1024)))
+MAX_PENDING = int(os.environ.get("MIDI_AI_MAX_PENDING", "6"))
+WORKERS = max(1, int(os.environ.get("MIDI_AI_WORKERS", "1")))
+MAX_OUT_FILES = int(os.environ.get("MIDI_AI_MAX_OUT_FILES", "40"))
+OUT_TTL = int(os.environ.get("MIDI_AI_OUT_TTL", "3600"))
+
 _OUT_DIR = tempfile.mkdtemp(prefix="midiai_out_")
 _JOBS: dict = {}
 _JOBS_LOCK = threading.Lock()
+_QUEUE: queue.Queue = queue.Queue(maxsize=MAX_PENDING)
+_WORKERS_STARTED = False
+
+
+def _cleanup_out_dir():
+    """Drop old renders so the container's writable layer cannot fill up."""
+    now = time.time()
+    try:
+        entries = [
+            (os.path.join(_OUT_DIR, n), os.path.getmtime(os.path.join(_OUT_DIR, n)))
+            for n in os.listdir(_OUT_DIR)
+        ]
+    except OSError:
+        return
+    for path, mtime in entries:
+        if now - mtime > OUT_TTL:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+    remaining = sorted(
+        ((p, m) for p, m in entries if os.path.exists(p)), key=lambda x: x[1]
+    )
+    if len(remaining) > MAX_OUT_FILES:
+        for path, _ in remaining[: len(remaining) - MAX_OUT_FILES]:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
+def _prune_jobs():
+    now = time.time()
+    with _JOBS_LOCK:
+        stale = [jid for jid, j in _JOBS.items()
+                 if j.get("status") in ("done", "error") and now - j.get("updated", now) > OUT_TTL]
+        for jid in stale:
+            _JOBS.pop(jid, None)
 
 
 def _safe_name(name: str) -> str:
     name = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._")
     name = re.sub(r"_+", "_", name)
     return (name or "output")[:80]
+
+
+def _set_job(job_id: str, **fields):
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if job is not None:
+            job.update(fields)
+            job["updated"] = time.time()
+
+
+def _worker_loop():
+    while True:
+        job_id, in_path, out_path, opts, out_name = _QUEUE.get()
+        try:
+            _set_job(job_id, status="running", started=time.time())
+            t0 = time.perf_counter()
+            opts.progress = lambda frac, jid=job_id: _set_job(jid, progress=float(frac))
+            result = render_file(in_path, out_path, opts)
+            _set_job(
+                job_id,
+                status="done",
+                progress=1.0,
+                url=f"/out/{out_name}",
+                outname=out_name,
+                duration=round(result.duration, 2),
+                bpm=result.bpm,
+                model_used=result.model_used,
+                elapsed=round(time.perf_counter() - t0, 2),
+                tracks=result.tracks,
+            )
+            # The input file is no longer needed.
+            try:
+                os.remove(in_path)
+            except OSError:
+                pass
+        except Exception as e:  # noqa: BLE001
+            _set_job(job_id, status="error", error=str(e), progress=1.0)
+        finally:
+            _cleanup_out_dir()
+            _prune_jobs()
+            _QUEUE.task_done()
+
+
+def _start_workers():
+    global _WORKERS_STARTED
+    if _WORKERS_STARTED:
+        return
+    _WORKERS_STARTED = True
+    for _ in range(WORKERS):
+        threading.Thread(target=_worker_loop, daemon=True, name="midi-render").start()
 
 
 PAGE = r"""<!doctype html>
@@ -234,7 +330,10 @@ function poll(){
   if(!state.job)return;
   fetch('/api/status?job='+state.job).then(r=>r.json()).then(j=>{
     if(j.progress!=null){$('pbar').style.width=Math.round(j.progress*100)+'%';}
-    if(j.status==='running'||j.status==='queued'){
+    if(j.status==='queued'){
+      status('En cola ('+(j.queue_size||0)+' pendientes)...');
+      setTimeout(poll,1000);
+    } else if(j.status==='running'){
       status('Renderizando... '+Math.round((j.progress||0)*100)+'%');
       setTimeout(poll,800);
     } else if(j.status==='done'){
@@ -282,6 +381,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/" or self.path == "/index.html":
             self._send(200, PAGE.encode("utf-8"))
+        elif self.path == "/healthz":
+            body = json.dumps({
+                "ok": True,
+                "workers": WORKERS,
+                "queue": _QUEUE.qsize(),
+                "queue_capacity": MAX_PENDING,
+            }).encode()
+            self._send(200, body, "application/json")
         elif self.path.startswith("/out/"):
             name = os.path.basename(unquote(self.path))
             path = os.path.join(_OUT_DIR, name)
@@ -294,11 +401,13 @@ class Handler(BaseHTTPRequestHandler):
             qs = parse_qs(self.path.split("?", 1)[-1])
             job_id = qs.get("job", [None])[0]
             with _JOBS_LOCK:
-                job = _JOBS.get(job_id)
+                job = dict(_JOBS[job_id]) if job_id in _JOBS else None
             if not job:
                 self._send(404, json.dumps({"status": "unknown"}).encode(), "application/json")
                 return
-            self._send(200, json.dumps(job).encode(), "application/json")
+            job["queue_size"] = _QUEUE.qsize()
+            self._send(200, json.dumps(job).encode(), "application/json",
+                       {"Cache-Control": "no-store"})
         else:
             self._send(404, b"not found", "text/plain")
 
@@ -306,14 +415,24 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/api/render":
             self._send(404, b"not found", "text/plain")
             return
-        length = int(self.headers.get("Content-Length", 0))
-        raw = self.rfile.read(length)
         try:
+            length = int(self.headers.get("Content-Length", 0))
+            if length <= 0 or length > MAX_UPLOAD:
+                self._send(413, json.dumps({"ok": False, "error": "file too large"}).encode(),
+                           "application/json")
+                return
+            raw = self.rfile.read(length)
             req = json.loads(raw)
-            data = base64.b64decode(req["data"])
+            data = base64.b64decode(req["data"], validate=True)
+            if len(data) > MAX_UPLOAD or data[:4] != b"MThd":
+                self._send(400, json.dumps({"ok": False, "error": "not a MIDI file"}).encode(),
+                           "application/json")
+                return
+
             raw_name = os.path.splitext(os.path.basename(req.get("name", "input.mid")))[0]
             name = _safe_name(raw_name)
-            in_path = os.path.join(_OUT_DIR, f"{int(time.time() * 1000)}_{os.getpid()}_in.mid")
+            token = uuid.uuid4().hex[:12]
+            in_path = os.path.join(_OUT_DIR, f"{token}_in.mid")
             with open(in_path, "wb") as f:
                 f.write(data)
 
@@ -333,49 +452,39 @@ class Handler(BaseHTTPRequestHandler):
             )
 
             job_id = uuid.uuid4().hex
+            out_name = f"{name}_{token}.wav"
+            out_path = os.path.join(_OUT_DIR, out_name)
             with _JOBS_LOCK:
-                _JOBS[job_id] = {"status": "queued", "progress": 0.0}
-
-            def worker():
+                _JOBS[job_id] = {"status": "queued", "progress": 0.0,
+                                 "queued": time.time(), "updated": time.time()}
+            try:
+                _QUEUE.put_nowait((job_id, in_path, out_path, opts, out_name))
+            except queue.Full:
                 with _JOBS_LOCK:
-                    _JOBS[job_id]["status"] = "running"
-                out_name = f"{name}_{int(time.time() * 1000)}.wav"
-                out_path = os.path.join(_OUT_DIR, out_name)
-                t0 = time.perf_counter()
+                    _JOBS.pop(job_id, None)
                 try:
-                    opts.progress = lambda f: _update_progress(job_id, f)
-                    result = render_file(in_path, out_path, opts)
-                    elapsed = time.perf_counter() - t0
-                    with _JOBS_LOCK:
-                        _JOBS[job_id].update({
-                            "status": "done",
-                            "progress": 1.0,
-                            "url": f"/out/{out_name}",
-                            "outname": out_name,
-                            "duration": round(result.duration, 2),
-                            "bpm": result.bpm,
-                            "model_used": result.model_used,
-                            "elapsed": round(elapsed, 2),
-                            "tracks": result.tracks,
-                        })
-                except Exception as e:  # noqa: BLE001
-                    with _JOBS_LOCK:
-                        _JOBS[job_id].update({"status": "error", "error": str(e)})
+                    os.remove(in_path)
+                except OSError:
+                    pass
+                self._send(429, json.dumps({
+                    "ok": False,
+                    "error": "server busy, try again in a moment",
+                }).encode(), "application/json")
+                return
 
-            def _update_progress(jid, frac):
-                with _JOBS_LOCK:
-                    if jid in _JOBS:
-                        _JOBS[jid]["progress"] = frac
-
-            threading.Thread(target=worker, daemon=True).start()
-            self._send(200, json.dumps({"ok": True, "job_id": job_id}).encode(), "application/json")
+            self._send(200, json.dumps({"ok": True, "job_id": job_id,
+                                        "queue": _QUEUE.qsize()}).encode(),
+                       "application/json")
         except Exception as e:  # noqa: BLE001
-            resp = {"ok": False, "error": str(e)}
-            self._send(200, json.dumps(resp).encode(), "application/json")
+            self._send(400, json.dumps({"ok": False, "error": str(e)}).encode(),
+                       "application/json")
 
 
 def main():
+    _start_workers()
+    _cleanup_out_dir()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
+    server.daemon_threads = True
     url = f"http://{HOST}:{PORT}"
     print(f"MIDI-AI Studio: {url}")
     print("Press Ctrl+C to stop.")

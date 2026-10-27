@@ -24,6 +24,17 @@ from .features import N_FEATURES
 
 TORCH_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
+# On small servers torch would otherwise use every core and oversubscribe the
+# CPU alongside the SoundFont renderer. One or two threads is plenty for a
+# tiny CNN and keeps the box responsive.
+_THREADS = max(1, int(os.environ.get(
+    "MIDI_AI_TORCH_THREADS", str(min(2, os.cpu_count() or 1)))))
+try:
+    torch.set_num_threads(_THREADS)
+    torch.set_num_interop_threads(1)
+except (RuntimeError, ValueError):
+    pass
+
 
 class ExpressiveMLP(nn.Module):
     def __init__(self, in_dim: int = N_FEATURES, hidden: int = 256, out_dim: int = 3):

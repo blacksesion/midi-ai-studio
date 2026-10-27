@@ -211,6 +211,31 @@ def _cache_key(midi_path: str, opts: RenderOptions) -> str:
     return h.hexdigest()
 
 
+def _prune_cache(cdir: str, max_files: int = 20, max_mb: int = 300):
+    """Keep the render cache bounded so the container disk cannot fill up."""
+    try:
+        files = [
+            (os.path.join(cdir, n), os.path.getmtime(os.path.join(cdir, n)),
+             os.path.getsize(os.path.join(cdir, n)))
+            for n in os.listdir(cdir)
+            if n.endswith(".wav")
+        ]
+    except OSError:
+        return
+    files.sort(key=lambda x: x[1])
+    total = 0
+    keep = []
+    for path, mtime, size in reversed(files):
+        if len(keep) < max_files and total + size <= max_mb * 1024 * 1024:
+            keep.append(path)
+            total += size
+        else:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
 def render_file(
     midi_path: str,
     out_path: str | None = None,
@@ -255,6 +280,7 @@ def render_file(
     if cache_path:
         try:
             save_audio(cache_path, result.audio, result.sample_rate)
+            _prune_cache(os.path.dirname(cache_path))
         except Exception:
             pass
     if out_path:

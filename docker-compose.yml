@@ -7,5 +7,23 @@ services:
     environment:
       MIDI_AI_HOST: "0.0.0.0"
       MIDI_AI_PORT: "8765"
+      MIDI_AI_WORKERS: "1"
+      MIDI_AI_MAX_PENDING: "6"
+      MIDI_AI_TORCH_THREADS: "2"
     ports:
       - "80:8765"
+    # Small instances (1 GB) must not let a render take the whole host down.
+    mem_limit: 700m
+    memswap_limit: 1g
+    cpus: 1.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/healthz', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3

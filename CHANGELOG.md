@@ -14,6 +14,13 @@
 - Feat: separate timing/dynamics/articulation strengths.
 - Feat: LUFS normalisation, true-peak limiter, multiformat export.
 - Feat: thread-safe model cache.
+- Fix: server stability — bounded render queue (1 worker), sequential stem
+  rendering on <4 CPUs, per-thread synth reuse, torch thread cap, upload/body
+  limits, output/cache pruning, `/healthz` and container healthcheck.
+- Ops: EC2 instance resized from t3.micro (1 GB) to t3.small (2 GB) after a
+  memory-exhaustion hang caused by concurrent renders.
+- Fix: `master_loudness()` iterates gain + limiter so the LUFS target is met
+  (sample: −15.03 LUFS, peak −1.01 dBFS).
 - Tests: smoke suite + CI workflow.
 
 ## v0.1.0
