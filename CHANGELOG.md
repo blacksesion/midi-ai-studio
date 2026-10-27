@@ -18,7 +18,9 @@
   rendering on <4 CPUs, per-thread synth reuse, torch thread cap, upload/body
   limits, output/cache pruning, `/healthz` and container healthcheck.
 - Ops: EC2 instance resized from t3.micro (1 GB) to t3.small (2 GB) after a
-  memory-exhaustion hang caused by concurrent renders.
+  memory-exhaustion hang caused by concurrent renders. The container is capped
+  at 1400 MiB (2 GB host swap), web renders are limited to 4 minutes, and a
+  69 s render now peaks at ~826 MiB (was ~1.03 GiB).
 - Fix: `master_loudness()` iterates gain + limiter so the LUFS target is met
   (sample: −15.03 LUFS, peak −1.01 dBFS).
 - Tests: smoke suite + CI workflow.
